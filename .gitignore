@@ -1,0 +1,33 @@
+# Cookies — never commit your session
+cookies*.json
+*.updated
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.env
+venv/
+.venv/
+
+# Playwright browsers (large binaries)
+playwright-browsers/
+chatgpt-browsers/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug screenshots
+tmp/
+debug.png
+chatgpt_debug.png

@@ -1,6 +1,7 @@
 # Cookies — never commit your session
 cookies*.json
 *.updated
+cookies.json.state
 
 # Python
 __pycache__/
@@ -14,6 +15,8 @@ build/
 .env
 venv/
 .venv/
+
+
 
 # Playwright browsers (large binaries)
 playwright-browsers/

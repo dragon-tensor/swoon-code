@@ -4,6 +4,8 @@ import time
 import os
 import re
 import subprocess
+import shutil
+import platform
 from pathlib import Path
 from typing import Optional
 
@@ -32,79 +34,214 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 )
 
-SYSTEM_PROMPT = """You are connected to the user's machine. You can create files, run commands, and search the web.
+SYSTEM_PROMPT = """You are connected to the user's machine with filesystem, shell, and web access.
 
-Use these blocks when the user asks you to do something on their machine:
+Use these blocks to interact with the machine:
 
-[write:/absolute/path/file]
-content here
+[write:/path/to/file]
+content
 [/write]
 
+[read:/path/to/file]
+[/read]
+
+[append:/path/to/file]
+content to add
+[/append]
+
+[edit:/path/to/file]
+Find: text to find
+Replace: replacement text
+[/edit]
+
+[ls:/path/to/dir]
+[/ls]
+
 [run]
-command here
+command
 [/run]
+
+[python]
+print("hello")
+[/python]
+
+[fetch:https://example.com]
+[/fetch]
 
 [browse]
 search query
 [/browse]
 
+[sysinfo]
+[/sysinfo]
+
 How it works:
-1. You output the block
-2. I execute it on the machine
-3. I show you the result
-4. Then you respond to the user
+1. You output action block(s)
+2. I execute them and show results
+3. You respond naturally
 
-You can chain multiple blocks in one response. Always respond naturally after the results come back."""
+Chain multiple blocks in one response. Paths can be absolute or relative to the project."""
 
-SYSTEM_REMINDER = "\n(If you need to use the machine, use [write:], [run], or [browse] blocks.)"
+SYSTEM_REMINDER = "\n(Use [write:], [read:], [run], [python], [browse], [fetch:], [ls:], [append:], [edit:] or [sysinfo] if needed.)"
+
+MAX_READ_SIZE = 512 * 1024
+MAX_OUTPUT = 50000
 
 
 def parse_actions(text: str) -> list[dict]:
     actions = []
-    # [write:/path] ... [/write]
     for m in re.finditer(r'\[write:([^\]]+)\]\s*(.*?)\s*\[/write\]', text, re.DOTALL):
         actions.append({"type": "write", "path": m.group(1).strip(), "content": m.group(2)})
-    # [run] ... [/run]
+    for m in re.finditer(r'\[read:([^\]]+)\]\s*\[/read\]', text, re.DOTALL):
+        actions.append({"type": "read", "path": m.group(1).strip()})
+    for m in re.finditer(r'\[append:([^\]]+)\]\s*(.*?)\s*\[/append\]', text, re.DOTALL):
+        actions.append({"type": "append", "path": m.group(1).strip(), "content": m.group(2)})
+    for m in re.finditer(r'\[edit:([^\]]+)\]\s*Find:\s*(.*?)\s*Replace:\s*(.*?)\s*\[/edit\]', text, re.DOTALL):
+        actions.append({"type": "edit", "path": m.group(1).strip(), "find": m.group(2).strip(), "replace": m.group(3).strip()})
+    for m in re.finditer(r'\[ls:([^\]]+)\]\s*\[/ls\]', text, re.DOTALL):
+        actions.append({"type": "ls", "path": m.group(1).strip()})
     for m in re.finditer(r'\[run\]\s*(.*?)\s*\[/run\]', text, re.DOTALL):
         actions.append({"type": "run", "command": m.group(1).strip()})
-    # [browse] ... [/browse]
+    for m in re.finditer(r'\[python\]\s*(.*?)\s*\[/python\]', text, re.DOTALL):
+        actions.append({"type": "python", "code": m.group(1).strip()})
+    for m in re.finditer(r'\[fetch:([^\]]+)\]\s*\[/fetch\]', text, re.DOTALL):
+        actions.append({"type": "fetch", "url": m.group(1).strip()})
     for m in re.finditer(r'\[browse\]\s*(.*?)\s*\[/browse\]', text, re.DOTALL):
         actions.append({"type": "browse", "query": m.group(1).strip()})
+    for m in re.finditer(r'\[sysinfo\]\s*\[/sysinfo\]', text, re.DOTALL):
+        actions.append({"type": "sysinfo"})
     return actions
+
+
+def _trim(text: str, limit: int = MAX_OUTPUT) -> str:
+    if len(text) > limit:
+        return text[:limit] + f"\n... (truncated, {len(text)} total chars)"
+    return text
 
 
 def execute_action(action: dict) -> str:
     t = action["type"]
+
     if t == "write":
         path = action["path"]
         content = action["content"]
         try:
-            p = Path(path)
+            p = Path(path).expanduser()
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content)
-            return f"Written to {path} ({len(content)} bytes)"
+            return f"Written {len(content)} bytes to {p}"
         except Exception as e:
             return f"Write error: {e}"
+
+    if t == "read":
+        path = Path(action["path"]).expanduser()
+        if not path.exists():
+            return f"File not found: {path}"
+        if path.is_dir():
+            return f"Is a directory: {path}"
+        if path.stat().st_size > MAX_READ_SIZE:
+            return f"File too large ({path.stat().st_size} bytes, max {MAX_READ_SIZE})"
+        try:
+            content = path.read_text(errors="replace")
+            return _trim(content)
+        except Exception as e:
+            return f"Read error: {e}"
+
+    if t == "append":
+        path = Path(action["path"]).expanduser()
+        content = action["content"]
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a") as f:
+                f.write(content + "\n")
+            return f"Appended {len(content)} bytes to {path}"
+        except Exception as e:
+            return f"Append error: {e}"
+
+    if t == "edit":
+        path = Path(action["path"]).expanduser()
+        find = action["find"]
+        replace = action["replace"]
+        if not path.exists():
+            return f"File not found: {path}"
+        try:
+            content = path.read_text(errors="replace")
+            if find not in content:
+                return f"Text not found in {path}: {find[:100]}"
+            count = content.count(find)
+            new_content = content.replace(find, replace)
+            path.write_text(new_content)
+            return f"Replaced {count} occurrence(s) in {path}"
+        except Exception as e:
+            return f"Edit error: {e}"
+
+    if t == "ls":
+        path = Path(action["path"]).expanduser()
+        if not path.exists():
+            return f"Not found: {path}"
+        if not path.is_dir():
+            return f"Not a directory: {path}"
+        try:
+            entries = list(path.iterdir())
+            dirs = sorted(e.name + "/" for e in entries if e.is_dir())
+            files = sorted(e.name for e in entries if e.is_file())
+            total = len(dirs) + len(files)
+            lines = [f"{path} ({total} entries):"]
+            for d in dirs:
+                lines.append(f"  {d}")
+            for f in files:
+                size = (path / f).stat().st_size
+                lines.append(f"  {f} ({size} bytes)")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Ls error: {e}"
 
     if t == "run":
         cmd = action["command"]
         try:
-            r = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, timeout=60
-            )
-            out = r.stdout.strip()
-            err = r.stderr.strip()
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
             parts = []
-            if out:
-                parts.append(f"--- stdout ---\n{out}")
-            if err:
-                parts.append(f"--- stderr ---\n{err}")
-            parts.append(f"exit code: {r.returncode}")
-            return "\n".join(parts) or "(no output)"
+            if r.stdout.strip():
+                parts.append(r.stdout.strip())
+            if r.stderr.strip():
+                parts.append(f"stderr:\n{r.stderr.strip()}")
+            parts.append(f"exit: {r.returncode}")
+            return _trim("\n".join(parts))
         except subprocess.TimeoutExpired:
-            return "Command timed out (60s)"
+            return "Command timed out (120s)"
         except Exception as e:
             return f"Run error: {e}"
+
+    if t == "python":
+        code = action["code"]
+        try:
+            import io
+            out = io.StringIO()
+            err = io.StringIO()
+            old_out, old_err = sys.stdout, sys.stderr
+            sys.stdout, sys.stderr = out, err
+            try:
+                exec(code, {"__builtins__": __builtins__})
+            finally:
+                sys.stdout, sys.stderr = old_out, old_err
+            parts = []
+            if out.getvalue().strip():
+                parts.append(out.getvalue().strip())
+            if err.getvalue().strip():
+                parts.append(f"stderr:\n{err.getvalue().strip()}")
+            return _trim("\n".join(parts)) if parts else "(no output)"
+        except Exception as e:
+            return f"Python error: {e}"
+
+    if t == "fetch":
+        url = action["url"]
+        import httpx
+        try:
+            r = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True)
+            text = r.text[:60000]
+            return _trim(f"HTTP {r.status_code} ({len(r.text)} bytes)\n\n{text}")
+        except Exception as e:
+            return f"Fetch error: {e}"
 
     if t == "browse":
         query = action["query"]
@@ -112,19 +249,29 @@ def execute_action(action: dict) -> str:
             return "No query."
         import httpx
         try:
-            r = httpx.get(
-                "https://html.duckduckgo.com/html/",
-                params={"q": query},
-                headers={"User-Agent": USER_AGENT},
-                timeout=15,
-            )
-            results = re.findall(
-                r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>',
-                r.text,
-            )
-            return "\n".join(f"{t}: {u}" for u, t in results[:5]) or "No results."
+            r = httpx.get("https://html.duckduckgo.com/html/", params={"q": query},
+                          headers={"User-Agent": USER_AGENT}, timeout=15)
+            results = re.findall(r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>', r.text)
+            return "\n".join(f"{t}: {u}" for u, t in results[:8]) or "No results."
         except Exception as e:
             return f"Browse error: {e}"
+
+    if t == "sysinfo":
+        try:
+            uname = platform.uname()
+            total, used, free = shutil.disk_usage("/")
+            info = [
+                f"OS: {uname.system} {uname.release}",
+                f"Host: {uname.node}",
+                f"Arch: {uname.machine}",
+                f"CPU: {os.cpu_count()} cores",
+                f"Python: {sys.version}",
+                f"CWD: {Path.cwd()}",
+                f"Disk: {free // (2**30)} GB free / {total // (2**30)} GB total",
+            ]
+            return "\n".join(info)
+        except Exception as e:
+            return f"Sysinfo error: {e}"
 
     return f"Unknown action: {t}"
 
@@ -273,10 +420,10 @@ class ChatGPTAgent:
             self.log(f"  Executing: {a['type']}")
             result = execute_action(a)
             self.log(f"  Result: {result[:80]}...")
-            results.append(f"[result for {a['type']}]\n{result}")
+            tag = a.get("path") or a.get("query") or a.get("type")
+            results.append(f"[result for {a['type']}: {tag}]\n{result}")
 
-        result_text = "\n\n".join(results)
-        feedback = f"{result_text}\n\nContinue your response based on these results."
+        feedback = "\n\n".join(results) + "\n\nContinue your response based on these results."
         self.log("Sending results back to ChatGPT...")
         final_raw = self.send(feedback)
         return final_raw

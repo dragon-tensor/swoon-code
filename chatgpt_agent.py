@@ -1,6 +1,10 @@
 import json
 import sys
 import time
+import os
+import re
+import subprocess
+from pathlib import Path
 from typing import Optional
 
 SAMESITE_MAP = {"lax": "Lax", "strict": "Strict", "none": "None"}
@@ -28,8 +32,104 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 )
 
+SYSTEM_PROMPT = """You are connected to the user's machine. You can create files, run commands, and search the web.
 
-class ChatGPT:
+Use these blocks when the user asks you to do something on their machine:
+
+[write:/absolute/path/file]
+content here
+[/write]
+
+[run]
+command here
+[/run]
+
+[browse]
+search query
+[/browse]
+
+How it works:
+1. You output the block
+2. I execute it on the machine
+3. I show you the result
+4. Then you respond to the user
+
+You can chain multiple blocks in one response. Always respond naturally after the results come back."""
+
+SYSTEM_REMINDER = "\n(If you need to use the machine, use [write:], [run], or [browse] blocks.)"
+
+
+def parse_actions(text: str) -> list[dict]:
+    actions = []
+    # [write:/path] ... [/write]
+    for m in re.finditer(r'\[write:([^\]]+)\]\s*(.*?)\s*\[/write\]', text, re.DOTALL):
+        actions.append({"type": "write", "path": m.group(1).strip(), "content": m.group(2)})
+    # [run] ... [/run]
+    for m in re.finditer(r'\[run\]\s*(.*?)\s*\[/run\]', text, re.DOTALL):
+        actions.append({"type": "run", "command": m.group(1).strip()})
+    # [browse] ... [/browse]
+    for m in re.finditer(r'\[browse\]\s*(.*?)\s*\[/browse\]', text, re.DOTALL):
+        actions.append({"type": "browse", "query": m.group(1).strip()})
+    return actions
+
+
+def execute_action(action: dict) -> str:
+    t = action["type"]
+    if t == "write":
+        path = action["path"]
+        content = action["content"]
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+            return f"Written to {path} ({len(content)} bytes)"
+        except Exception as e:
+            return f"Write error: {e}"
+
+    if t == "run":
+        cmd = action["command"]
+        try:
+            r = subprocess.run(
+                cmd, shell=True, capture_output=True, text=True, timeout=60
+            )
+            out = r.stdout.strip()
+            err = r.stderr.strip()
+            parts = []
+            if out:
+                parts.append(f"--- stdout ---\n{out}")
+            if err:
+                parts.append(f"--- stderr ---\n{err}")
+            parts.append(f"exit code: {r.returncode}")
+            return "\n".join(parts) or "(no output)"
+        except subprocess.TimeoutExpired:
+            return "Command timed out (60s)"
+        except Exception as e:
+            return f"Run error: {e}"
+
+    if t == "browse":
+        query = action["query"]
+        if not query:
+            return "No query."
+        import httpx
+        try:
+            r = httpx.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                headers={"User-Agent": USER_AGENT},
+                timeout=15,
+            )
+            results = re.findall(
+                r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)</a>',
+                r.text,
+            )
+            return "\n".join(f"{t}: {u}" for u, t in results[:5]) or "No results."
+        except Exception as e:
+            return f"Browse error: {e}"
+
+    return f"Unknown action: {t}"
+
+
+class ChatGPTAgent:
     def __init__(self, cookie_path: str, verbose: bool = False):
         self.cookie_path = cookie_path
         self.verbose = verbose
@@ -38,11 +138,12 @@ class ChatGPT:
         self.browser = None
         self.context = None
         self.page = None
+        self.turn_count = 0
         self._load_cookies()
 
     def log(self, msg: str):
         if self.verbose:
-            print(f"[chatgpt] {msg}", file=sys.stderr)
+            print(f"[agent] {msg}", file=sys.stderr)
 
     def _load_cookies(self):
         with open(self.cookie_path) as f:
@@ -60,9 +161,7 @@ class ChatGPT:
         from playwright.sync_api import sync_playwright
         self._playwright_cm = sync_playwright()
         self.playwright = self._playwright_cm.__enter__()
-        self.browser = self.playwright.chromium.launch(
-            headless=True,
-        )
+        self.browser = self.playwright.chromium.launch(headless=True)
         self.context = self.browser.new_context(
             viewport={"width": 1280, "height": 800},
             user_agent=USER_AGENT,
@@ -70,11 +169,8 @@ class ChatGPT:
         self.context.add_cookies(self.raw_cookies)
         self.page = self.context.new_page()
         self.page.set_default_timeout(60000)
-        self._navigate()
-        self.log("Ready")
 
-    def _navigate(self):
-        self.log("Opening chat.openai.com...")
+        self.log("Navigating to chat.openai.com...")
         self.page.goto("https://chat.openai.com", wait_until="domcontentloaded")
         for _ in range(60):
             title = self.page.title()
@@ -85,31 +181,19 @@ class ChatGPT:
         self.log(f"Page: {self.page.url}")
 
         if "login" in self.page.url.lower():
-            raise RuntimeError(
-                "Redirected to login. Export fresh cookies from chatgpt.com "
-                "after signing in."
-            )
+            raise RuntimeError("Redirected to login. Refresh cookies from chatgpt.com.")
 
         for sel in TEXTAREA_SELECTORS:
             try:
                 self.page.wait_for_selector(sel, timeout=5000)
-                self.log(f"Found input")
+                self.log("Chat input found")
                 return
             except Exception:
                 continue
         self.page.screenshot(path="/tmp/chatgpt_debug.png")
-        raise RuntimeError(
-            "Could not find chat input. Session may be expired. "
-            "Saved debug screenshot to /tmp/chatgpt_debug.png."
-        )
+        raise RuntimeError("Chat input not found. Session expired?")
 
     def send(self, text: str) -> str:
-        modal = self.page.query_selector("#modal-no-auth-login")
-        if modal and modal.is_visible():
-            raise RuntimeError(
-                "Login modal blocking input. Export fresh cookies from chatgpt.com."
-            )
-
         el = None
         for sel in TEXTAREA_SELECTORS:
             e = self.page.query_selector(sel)
@@ -166,6 +250,37 @@ class ChatGPT:
         msgs = self.page.query_selector_all(MESSAGE_SELECTOR)
         return msgs[-1].inner_text() if msgs else ""
 
+    def run_agent(self, user_message: str) -> str:
+        self.turn_count += 1
+        if self.turn_count == 1:
+            full = SYSTEM_PROMPT + "\n\n" + user_message
+        elif self.turn_count % 3 == 0:
+            full = user_message + SYSTEM_REMINDER
+        else:
+            full = user_message
+
+        self.log(f"Turn {self.turn_count}, sending to ChatGPT...")
+        raw = self.send(full)
+        self.log(f"Response ({len(raw)} chars)")
+
+        actions = parse_actions(raw)
+        if not actions:
+            return raw
+
+        self.log(f"Found {len(actions)} action(s)")
+        results = []
+        for a in actions:
+            self.log(f"  Executing: {a['type']}")
+            result = execute_action(a)
+            self.log(f"  Result: {result[:80]}...")
+            results.append(f"[result for {a['type']}]\n{result}")
+
+        result_text = "\n\n".join(results)
+        feedback = f"{result_text}\n\nContinue your response based on these results."
+        self.log("Sending results back to ChatGPT...")
+        final_raw = self.send(feedback)
+        return final_raw
+
     def close(self):
         try:
             self.context.storage_state(path=self.cookie_path + ".state")
@@ -183,7 +298,7 @@ class ChatGPT:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="ChatGPT CLI — headless browser relay")
+    parser = argparse.ArgumentParser(description="ChatGPT Agent")
     parser.add_argument("--cookies", required=True)
     parser.add_argument("--prompt", "-p")
     parser.add_argument("--interactive", "-i", action="store_true")
@@ -194,12 +309,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    client = ChatGPT(args.cookies, verbose=args.verbose)
+    agent = ChatGPTAgent(args.cookies, verbose=args.verbose)
     try:
-        client.start()
+        agent.start()
 
         if args.interactive:
-            print("ChatGPT — type messages, /quit to exit")
+            print("Agent — type messages, /quit to exit")
             while True:
                 try:
                     msg = input("> ").strip()
@@ -210,12 +325,14 @@ def main():
                 if msg == "/quit":
                     break
                 print()
-                print(client.send(msg))
+                resp = agent.run_agent(msg)
+                print(resp)
                 print()
         else:
-            print(client.send(args.prompt))
+            resp = agent.run_agent(args.prompt)
+            print(resp)
     finally:
-        client.close()
+        agent.close()
 
 
 if __name__ == "__main__":

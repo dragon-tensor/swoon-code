@@ -2,7 +2,7 @@
 set -euo pipefail
 
 VENV=/tmp/chatgpt-venv
-SCRIPT="$(dirname "$0")/chatgpt_client.py"
+SCRIPT="$(dirname "$0")/chatgpt_agent.py"
 
 if [ ! -f "$SCRIPT" ]; then
     echo "Error: $SCRIPT not found" >&2
@@ -10,3 +10,4 @@ if [ ! -f "$SCRIPT" ]; then
 fi
 
 exec "$VENV/bin/python" "$SCRIPT" "$@"
+

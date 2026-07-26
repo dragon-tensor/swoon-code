@@ -1,13 +1,13 @@
-# ChatGPT Agent
+# ChatGPT CLI
 
-Headless browser agent for ChatGPT. Uses your own session — no API key.
+Headless browser terminal chatbot for ChatGPT. Uses your own session — no API key.
 
 **⚠️ Experimental / educational.** Automated access may violate OpenAI's ToS.
 
 ## Setup
 
 ```bash
-pip install playwright httpx
+pip install playwright
 playwright install chromium
 ```
 
@@ -18,25 +18,8 @@ playwright install chromium
 ./chatgpt.sh --cookies cookies.json -i
 
 # Single prompt
-./chatgpt.sh --cookies cookies.json -p "write hello.py with print('hi')"
+./chatgpt.sh --cookies cookies.json -p "What is Rust?"
 ```
-
-## Agent capabilities
-
-| Block | Description |
-|---|---|
-| `[write:/path] ... [/write]` | Create or overwrite a file |
-| `[read:/path] [/read]` | Read a file |
-| `[append:/path] ... [/append]` | Append to a file |
-| `[edit:/path] Find: ... Replace: ... [/edit]` | Find & replace in file |
-| `[ls:/path] [/ls]` | List directory |
-| `[run] ... [/run]` | Run shell command |
-| `[python] ... [/python]` | Run Python inline |
-| `[fetch:url] [/fetch]` | Fetch a web page |
-| `[browse] ... [/browse]` | Search DuckDuckGo |
-| `[sysinfo] [/sysinfo]` | System info (OS, CPU, disk) |
-
-ChatGPT outputs these blocks, the agent executes them and feeds results back.
 
 ## Getting cookies
 

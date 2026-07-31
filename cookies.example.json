@@ -1,0 +1,46 @@
+[
+    {
+        "domain": ".openai.com",
+        "hostOnly": false,
+        "httpOnly": false,
+        "name": "f_clearance",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "session": false,
+        "value": "PASTE_YOUR_f_clearance_VALUE_HERE"
+    },
+    {
+        "domain": ".openai.com",
+        "hostOnly": false,
+        "httpOnly": true,
+        "name": "oai-client-auth-info",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "session": true,
+        "value": "PASTE_YOUR_VALUE_HERE"
+    },
+    {
+        "domain": ".chat.openai.com",
+        "hostOnly": false,
+        "httpOnly": true,
+        "name": "unified_session_manifest",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "session": false,
+        "value": "PASTE_YOUR_SESSION_MANIFEST_HERE"
+    },
+    {
+        "domain": ".chat.openai.com",
+        "hostOnly": false,
+        "httpOnly": true,
+        "name": "usc_ezu8rXDO3Gw2lseZr5jpcp5U",
+        "path": "/",
+        "sameSite": "Lax",
+        "secure": true,
+        "session": false,
+        "value": "PASTE_YOUR_USC_VALUE_HERE"
+    }
+]

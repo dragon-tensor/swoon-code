@@ -1,5 +1,6 @@
 # Cookies — never commit your session
 cookies*.json
+!cookies.example.json
 *.updated
 cookies.json.state
 

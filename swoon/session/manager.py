@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -208,7 +209,14 @@ class SessionManager:
 
         return self._update(session, mutate)
 
-    def record_action_result(self, session: Session, tool: str, result: Result) -> Session:
+    def record_action_result(
+        self,
+        session: Session,
+        tool: str,
+        result: Result,
+        *,
+        action_digest: str | None = None,
+    ) -> Session:
         if not isinstance(tool, str) or not tool.strip():
             raise SessionError("invalid_action_record", "Tool name cannot be empty")
         if (
@@ -222,6 +230,11 @@ class SessionManager:
                 "result_too_large",
                 f"Persisted result exceeds {self.max_result_bytes} bytes",
             )
+        if action_digest is not None and (
+            not isinstance(action_digest, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", action_digest)
+        ):
+            raise SessionError("invalid_action_record", "Invalid action digest")
 
         def mutate(state: SessionState) -> SessionState:
             self._require_active(state)
@@ -235,6 +248,7 @@ class SessionManager:
                 tool=tool,
                 result=result,
                 completed_at=self._now(),
+                action_digest=action_digest,
             )
             return replace(
                 state,

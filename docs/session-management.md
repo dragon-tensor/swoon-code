@@ -45,7 +45,7 @@ owner could otherwise change permission bits.
 - Session identity, lifecycle status, timestamps, and revision
 - Current and maximum step counts
 - Persisted plan
-- Completed action/result ledger for idempotency
+- Completed action/result ledger with normalized action digests for idempotency
 - Ordered result history
 - Chunk sequence state
 - Background-process handles and output offsets

@@ -184,6 +184,28 @@ class SessionManagerTests(unittest.TestCase):
             self.manager.record_action_result(session, "list-dir", result)
         self.assertEqual(raised.exception.code, "duplicate_action_id")
 
+    def test_version_one_state_is_loaded_and_upgraded_on_update(self) -> None:
+        session = self.manager.create(session_id="sess_v1_upgrade")
+        self.manager.record_action_result(
+            session,
+            "list-dir",
+            Result("a1", ResultStatus.SUCCESS, body="legacy"),
+        )
+        raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        raw["version"] = 1
+        for action in raw["action_ledger"]:
+            action.pop("action_digest")
+        session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
+        session.paths.state_file.chmod(0o600)
+
+        loaded = self.manager.load(session.id)
+        self.assertIsNone(loaded.state.action("a1").action_digest)
+        self.manager.set_plan(loaded, "upgrade")
+
+        upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(upgraded["version"], 2)
+        self.assertIn("action_digest", upgraded["action_ledger"][0])
+
     def test_oversized_result_is_not_persisted(self) -> None:
         manager = SessionManager(self.root / "small-state", max_result_bytes=4)
         session = manager.create(session_id="sess_result_limit")

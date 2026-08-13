@@ -14,11 +14,13 @@ from swoon.aeml.models import PathRef, Result, ResultStatus, Root, Truncation
 from .errors import SessionError
 
 
-STATE_VERSION = 1
+STATE_VERSION = 2
+SUPPORTED_STATE_VERSIONS = frozenset({1, STATE_VERSION})
 SESSION_ID_PATTERN = re.compile(r"sess_[A-Za-z0-9_-]{1,64}\Z")
 ACTION_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 TOOL_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
 PROCESS_HANDLE_PATTERN = re.compile(r"proc_[A-Za-z0-9_-]{1,64}\Z")
+ACTION_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class SessionStatus(str, Enum):
@@ -52,6 +54,7 @@ class ActionRecord:
     tool: str
     result: Result
     completed_at: datetime
+    action_digest: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +154,8 @@ class SessionState:
                 "invalid_session_state",
                 f"Session state keys differ (missing={missing}, unknown={unknown})",
             )
-        if raw["version"] != STATE_VERSION:
+        version = raw["version"]
+        if type(version) is not int or version not in SUPPORTED_STATE_VERSIONS:
             raise SessionError(
                 "unsupported_session_version",
                 f"Unsupported session state version {raw['version']!r}",
@@ -176,7 +180,7 @@ class SessionState:
             raise SessionError("invalid_session_state", "Unknown session status") from error
 
         action_values = _required_list(raw, "action_ledger")
-        actions = tuple(_action_from_dict(item) for item in action_values)
+        actions = tuple(_action_from_dict(item, version=version) for item in action_values)
         action_ids = [item.action_id for item in actions]
         if len(action_ids) != len(set(action_ids)):
             raise SessionError("invalid_session_state", "Action ledger contains duplicate IDs")
@@ -353,18 +357,28 @@ def _action_to_dict(record: ActionRecord) -> dict[str, Any]:
     return {
         "action_id": record.action_id,
         "tool": record.tool,
+        "action_digest": record.action_digest,
         "result": _result_to_dict(record.result),
         "completed_at": _timestamp(record.completed_at),
     }
 
 
-def _action_from_dict(raw: Any) -> ActionRecord:
-    if not isinstance(raw, dict) or set(raw) != {"action_id", "tool", "result", "completed_at"}:
+def _action_from_dict(raw: Any, *, version: int) -> ActionRecord:
+    expected = {"action_id", "tool", "result", "completed_at"}
+    if version >= 2:
+        expected.add("action_digest")
+    if not isinstance(raw, dict) or set(raw) != expected:
         raise SessionError("invalid_session_state", "Invalid action ledger record")
     action_id = _required_string(raw, "action_id")
     tool = _required_string(raw, "tool")
     if not ACTION_ID_PATTERN.fullmatch(action_id) or not TOOL_NAME_PATTERN.fullmatch(tool):
         raise SessionError("invalid_session_state", "Invalid action ID or tool name")
+    action_digest = raw.get("action_digest")
+    if action_digest is not None and (
+        not isinstance(action_digest, str)
+        or not ACTION_DIGEST_PATTERN.fullmatch(action_digest)
+    ):
+        raise SessionError("invalid_session_state", "Invalid action digest")
     result = _result_from_dict(raw["result"])
     if result.action_id != action_id:
         raise SessionError("invalid_session_state", "Action and result IDs do not match")
@@ -373,6 +387,7 @@ def _action_from_dict(raw: Any) -> ActionRecord:
         tool=tool,
         result=result,
         completed_at=_datetime(raw, "completed_at"),
+        action_digest=action_digest,
     )
 
 

@@ -199,16 +199,23 @@ in the first place; the reactive fallback catches what wasn't scoped.
 ## 6. Sandbox rules
 
 - Both roots are fixed and identical across host OS: `/output/<session_id>/`,
-  `/input/<session_id>/`. No absolute paths outside these, no `..` traversal —
-  `<error code="path_escape">`.
+  `/input/<session_id>/`. These are logical protocol paths mapped internally to private host
+  session directories. No absolute paths outside these, no `..` traversal — `<error
+  code="path_escape">`.
+- Root-relative paths always use `/` separators. Drive paths, backslashes, embedded `.`
+  segments, empty segments, control characters, and platform-reserved device names are
+  rejected so the accepted namespace is identical on Windows/Linux/Mac.
+- Symbolic-link path components and hard-linked regular files are rejected. An authorized path
+  is fingerprinted and revalidated immediately before use; a changed path fails closed.
 - `/input/<session_id>/` is read-only to every tool, no exceptions, not even
   `overwrite-file` — attempting a write there is `<error code="input_readonly">` before
   execution, regardless of who asked for it (LLM output or the human's own prompt text).
 - A session can only ever resolve paths inside its own `<session_id>` pair — no cross-session
   reads, even read-only ones.
-- Fixed denylist inside `/output` regardless of path resolution: `.env`, `.git/config`,
+- Fixed denylist inside both roots regardless of path resolution: `.env`, `.git/config`,
   `*.pem`, `id_rsa*`, anything credential-shaped. Blocks both a hallucinated instruction and an
-  injected one from exfiltrating secrets that happen to live in the project folder.
+  injected one from exfiltrating secrets that happen to live in the project folder. Directory
+  listings filter denied children as well.
 - `run-command` is not a shell escape hatch for these rules — path-shaped arguments inside a
   command string are checked against the same sandbox before execution.
 
@@ -446,13 +453,18 @@ needed" params/tools doing their job of keeping message size down.
 
 ---
 
-## 11. Remaining open items
+## 11. Resolved and remaining items
 
-- Exact `max_steps` default and whether it's per-session or globally configurable.
+Resolved by the session-management implementation:
+
+- `max_steps` defaults to 40 per session. The interpreter has a global default and creation of
+  an individual session may override it.
+- Explicitly loading an existing `session_id` resumes the same `/output/<id>` + `/input/<id>`
+  pair and its persisted state. Starting without a session ID always creates a fresh pair.
+
+Remaining open items:
+
 - Truncation threshold (bytes/tokens) for the *reactive* `<truncated>` fallback in §8 — separate
   from the LLM's own proactive chunk-size judgment, which stays unspecified per §0.10.
 - Whether background processes (`run-command-background`) need a heartbeat tag so the
   interpreter knows a dev server is still alive between turns.
-- Whether re-opening the same `session_id` later resumes the same `/output/<id>` +
-  `/input/<id>` pair, or a session is always one-shot and a resumed chat gets a fresh pair with
-  the old one copied in as new `/input` reference material.

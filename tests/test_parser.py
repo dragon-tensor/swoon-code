@@ -101,6 +101,14 @@ class AEMLParserTests(unittest.TestCase):
         with self.assertRaisesRegex(AEMLParseError, "parser limit"):
             parser.parse('<aeml turn="1" session="sess_x"><next>proceed</next></aeml>')
 
+    def test_invalid_unicode_is_a_structured_parse_error(self) -> None:
+        with self.assertRaises(AEMLParseError) as raised:
+            self.parser.parse(
+                '<aeml turn="1" session="sess_x"><say>\ud800</say>'
+                "<next>proceed</next></aeml>"
+            )
+        self.assertEqual(raised.exception.code, "parse_error")
+
 
 if __name__ == "__main__":
     unittest.main()

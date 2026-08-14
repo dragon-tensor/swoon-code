@@ -1,4 +1,4 @@
-"""Declarative schemas for every tool named by AEML v0.2."""
+"""Declarative schemas for every tool named by AEML v0.3."""
 
 from __future__ import annotations
 

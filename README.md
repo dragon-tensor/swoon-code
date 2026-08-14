@@ -19,6 +19,7 @@ Implemented foundations:
 5. Isolated, resumable session management
 6. Virtual-root path authorization
 7. Read-only tool execution
+8. Bounded AEML context, generated prompts, and validated single exchanges
 
 The currently executable AEML tools are:
 
@@ -30,8 +31,9 @@ The currently executable AEML tools are:
 - `git-log`
 - `list-dependencies`
 
-Mutating tools and arbitrary command execution remain disabled. The browser transport has not
-yet been connected to the AEML orchestration loop.
+Mutating tools and arbitrary command execution remain disabled. The browser transport can now
+perform one generated-and-validated AEML exchange at a time, but the autonomous orchestration
+loop is not implemented yet.
 
 ## Setup
 
@@ -81,12 +83,36 @@ responses = ReadOnlyToolDispatcher(sessions).execute_message(validated, session)
 Only validated read actions on the explicit Phase 7 allowlist can execute. Successes are
 persisted for idempotent replay; failures are returned as structured protocol errors.
 
+To send one protocol turn through the browser transport:
+
+    from swoon import AEMLContextBuilder
+    from swoon.transport import AEMLChatChannel, ChatGPTWebTransport
+
+    browser = ChatGPTWebTransport("cookies.json")
+    browser.start()
+    try:
+        channel = AEMLChatChannel(browser)
+        context = AEMLContextBuilder().build(
+            session,
+            turn=1,
+            user_prompt="Inspect this project.",
+        )
+        validated = channel.exchange(
+            context,
+            known_action_ids=session.state.result_history,
+        )
+    finally:
+        browser.close()
+
+This returns an inert ValidatedMessage; it does not execute tools or continue automatically.
+
 ## Documentation
 
 - `aeml_protocol_spec.md` — protocol contract
 - `docs/session-management.md` — persistent session boundary
 - `docs/path-policy.md` — virtual path policy
 - `docs/read-only-tools.md` — Phase 7 execution behavior
+- `docs/context-and-prompts.md` — Phase 8 context and transport bridge
 - `MIGRATION.md` — original relay history
 
 ## Tests

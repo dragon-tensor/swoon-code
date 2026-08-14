@@ -1,5 +1,5 @@
 # AEML — Agent Execution Markup Language
-### Protocol spec v0.2 — for swoon code
+### Protocol spec v0.3 — for swoon code
 
 This is the contract between a hosted chatbot (no machine access, turn-based, message-size
 limited) and a local interpreter (full machine access, no reasoning) that lets the two together
@@ -96,12 +96,23 @@ characters such as `<` and `&` cannot corrupt the envelope:
 
 | Tag | Purpose |
 |---|---|
+| `<user_prompt>` | The human's current task text; present when a new human prompt enters the session |
+| `<plan>` | Restates the compact persisted plan |
+| `<history><summary id="..." tool="..." status="...">` | One-line records for older results outside the full-result window |
 | `<result id="..." lines="120-160">` | Wraps tool output; `lines` present when the action used `start_line`/`end_line` |
 | `<error id="..." code="...">` | Structured failure, fixed code enum (§8) |
 | `<status>` | `success` \| `failure` \| `partial` \| `timeout` |
+| `<output>` | Escaped text body of a successful, partial, or timed-out result |
+| `<message>` | Escaped human-readable body of a structured error |
 | `<truncated total_bytes="..." offset="...">` | Reactive cut for size — different from the LLM's own proactive `<chunk>` (§7) |
-| `<env>` | Restates `output_root`, `input_root`, `cwd` every turn |
+| `<env>` | Restates `output_root`, `input_root`, `cwd`, and session `status` every turn |
 | `<system_notice type="...">` | step-limit approaching, confirmation pending, **`likely_truncated_by_message_limit`** (§7) |
+
+The interpreter constructs this XML structurally, never by concatenating untrusted text.
+Metacharacters in prompts, plans, results, errors, and summaries are escaped. A character that
+XML 1.0 cannot represent is emitted visibly as a literal `\uXXXX` or `\UXXXXXXXX`;
+the containing element receives `escaped_controls="true"`. Both roots and the environment
+are stamped with logical session paths only, never physical host paths.
 
 ---
 
@@ -112,17 +123,21 @@ characters such as `<` and `&` cannot corrupt the envelope:
    If the user pointed swoon code at an existing project, it's copied into /input/<session_id>/
    at this step — read-only reference material from here on.
 1. User sends the build prompt.
-2. Interpreter sends turn 1: <aeml_context> with both roots, empty env, the prompt.
+2. Interpreter generates a bootstrap from the enabled tool schemas and sends turn 1:
+   <aeml_context> with both roots, environment, and the prompt.
 3. Chatbot replies: <plan> (optional) + first <action> + <next>.
 4. Interpreter validates tool name, root+path (must resolve inside the matching session
    folder), args. If <expect_confirm>true</expect_confirm>: pauses, asks the human directly
    in the terminal, never asks the chatbot. Executes.
-5. Interpreter wraps output in <result id="matching-id">, <status>, fresh <env>, sends as
-   next <aeml_context>.
+5. Interpreter wraps output in <result id="matching-id">, <status>, fresh <env>, and sends the
+   next <aeml_context> with a compact continuation reminder.
 6. Loop continues until <complete>, <ask_user>, or a hard stop (step limit, abort, unrecoverable
    error, or an unresolved chunk sequence — §7).
 7. On <complete>, interpreter prints the summary and closes the session.
 ```
+
+The transport bridge performs one numbered exchange per call. The autonomous orchestrator owns
+the repetition, action execution, retries, user pauses, and lifecycle transitions.
 
 ---
 
@@ -298,7 +313,7 @@ generic-parse-error remedy and would be the wrong fix here).
 | Tool execution failure | `<error code="tool_failed">` with stderr. Read ops: 1 silent retry. Write/execute ops: 0 automatic retries. |
 | `<ask_user>` mid-loop | Loop pauses fully; only a real human reply resumes it. |
 | Cross-session path reference | `<error code="path_escape">` — sessions are fully isolated. |
-| Session/context growing large over many turns | Compact: keep `<plan>`, last N results in full, summarize older ones to one line — always re-stamp both roots and `<env>` regardless of compaction. |
+| Session/context growing large over many turns | Keep bounded `<plan>` text, the last N results in bounded full form, and bounded one-line history summaries. Emit compaction/omission notices and always re-stamp both roots and `<env>`. |
 | Empty directory listed | Normal `<result>`, empty body, not an error. |
 
 ---
@@ -314,7 +329,8 @@ Turn 0 (interpreter, no LLM call)
 Turn 1 (interpreter → LLM)
 <aeml_context turn="1" session="sess_9f2"
               output_root="/output/sess_9f2" input_root="/input/sess_9f2" step="1/40">
-  <env cwd="/output/sess_9f2"/>
+  <env output_root="/output/sess_9f2" input_root="/input/sess_9f2"
+       cwd="/output/sess_9f2" status="active"/>
   <user_prompt>Build a simple Flask hello-world API.</user_prompt>
 </aeml_context>
 
@@ -330,7 +346,8 @@ Turn 1 (LLM → interpreter)
   <next>await_result</next>
 </aeml>
 
-Turn 2 (interpreter → LLM) → <result id="a1"><status>success</status></result>  (empty)
+Turn 2 (interpreter → LLM) →
+<result id="a1"><status>success</status><output /></result>  (empty)
 
 Turn 2 (LLM → interpreter)
 <aeml turn="2" session="sess_9f2">
@@ -471,6 +488,16 @@ Resolved by the read-only tool implementation:
 - Read-only Git commands run only against a bounded disposable repository snapshot with local,
   global, and system Git configuration disabled. Credential paths and external object stores are
   excluded before Git runs.
+
+Resolved by the context and prompt implementation:
+
+- Interpreter context is deterministic, XML-safe, byte-bounded, and contains logical roots only.
+- Recent results remain available in bounded full form while older results become bounded
+  one-line summaries with explicit compaction and omission notices.
+- Bootstrap tool schemas are generated from the executable allowlist. The same reduced schema map
+  validates assistant responses, so future-facing registry entries are not accidentally enabled.
+- A session-bound channel performs one transport exchange at a time and advances its turn only
+  after the assistant response parses and validates.
 
 Remaining open items:
 

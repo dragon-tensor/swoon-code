@@ -106,6 +106,7 @@ class Environment:
     output_root: str
     input_root: str
     cwd: str
+    status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +138,14 @@ class SystemNotice:
 
 
 @dataclass(frozen=True, slots=True)
+class ResultSummary:
+    action_id: str
+    tool: str
+    status: ResultStatus
+    preview: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class AEMLContext:
     turn: int
     session: str
@@ -148,6 +157,7 @@ class AEMLContext:
     errors: tuple[ProtocolError, ...] = ()
     notices: tuple[SystemNotice, ...] = ()
     plan: str | None = None
+    summaries: tuple[ResultSummary, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

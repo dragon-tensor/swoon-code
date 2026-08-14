@@ -36,7 +36,11 @@ class AEMLParser:
     def parse(self, response: str) -> AEMLMessage:
         if not isinstance(response, str):
             raise AEMLParseError("AEML response must be text")
-        if len(response.encode("utf-8")) > self.max_message_bytes:
+        try:
+            response_bytes = len(response.encode("utf-8"))
+        except UnicodeEncodeError as error:
+            raise AEMLParseError("AEML response contains invalid Unicode") from error
+        if response_bytes > self.max_message_bytes:
             raise AEMLParseError(
                 f"AEML response exceeds the {self.max_message_bytes}-byte parser limit"
             )

@@ -31,3 +31,17 @@ class AEMLValidationError(AEMLError):
 
     def __init__(self, code: str, message: str, *, action_id: str | None = None) -> None:
         super().__init__(code, message, action_id=action_id)
+
+
+class AEMLContextError(AEMLError):
+    """An interpreter-to-assistant context cannot be built or serialized safely."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(code, message)
+
+
+class AEMLChannelError(AEMLError):
+    """A single-exchange channel invariant was violated before validation."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(code, message)

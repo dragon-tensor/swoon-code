@@ -157,7 +157,7 @@ stays out of AEML entirely — no round trip for something local execution can't
 cli-agent
 ├── terminal
 │   ├── run-command            (foreground, blocking, hard timeout, optional max_output_lines)
-│   ├── run-command-background (dev servers — returns a handle, not output)
+│   ├── run-command-background (offline long-running work — returns a handle, not output)
 │   ├── kill-process           (needs handle from run-command-background)
 │   ├── stream-output          (chunked reads from a background process, by handle + offset)
 │   └── get-env / set-env
@@ -237,15 +237,15 @@ in the first place; the reactive fallback catches what wasn't scoped.
   `*.pem`, `id_rsa*`, anything credential-shaped. Blocks both a hallucinated instruction and an
   injected one from exfiltrating secrets that happen to live in the project folder. Directory
   listings filter denied children as well.
-- `run-command` is not a shell escape hatch for these rules — path-shaped arguments inside a
+- Command tools are not shell escape hatches for these rules — path-shaped arguments inside a
   command string are checked against the same sandbox before execution.
-- In the Phase 12 foreground implementation, commands are split into a fixed argv and are never
+- In the Phase 12/13 command implementations, commands are split into a fixed argv and are never
   passed to an interpreter-selected shell. Direct shell operators, traversal, cross-session
   absolute paths, credential paths, and URL arguments fail before launch.
-- Foreground commands receive credential-filtered snapshots rather than the physical session
+- Foreground and background commands receive credential-filtered snapshots rather than the physical session
   directories. Input is mounted read-only; output is copied into a size-limited tmpfs. All
   command-side changes are discarded, so `run-command` cannot bypass overwrite/delete policy.
-- The foreground sandbox is offline: its environment is cleared and socket creation is denied by
+- Command sandboxes are offline: their environment is cleared and socket creation is denied by
   inherited seccomp in addition to user/mount/PID/IPC/UTS isolation and resource limits. A host
   without the required 64-bit Linux sandbox primitives fails closed.
 
@@ -562,10 +562,25 @@ Resolved by the foreground command implementation:
 - Managed build/test/linter commands use fixed per-ecosystem argv templates. Omitted manager
   detection must find exactly one ecosystem; target is one bounded argument, never command text.
 
+Resolved by the background command implementation:
+
+- `run-command-background` reuses the offline disposable command sandbox and publishes an opaque,
+  session-scoped process handle only after the trusted launcher readiness marker appears.
+- A live in-memory supervisor owns the exact process object, incrementally captures sanitized
+  UTF-8 into a private bounded log, and terminates on line, byte, runtime, session, or host limits.
+- `stream-output` is the liveness query and heartbeat: it reports status plus a stable byte count
+  and continues through a validated UTF-8 `next_offset`. `kill-process` signals only the exact
+  live supervisor associated with the session handle.
+- Persisted PIDs are diagnostic only and are never used for signals. A `running` record without
+  its original live supervisor becomes `lost`/`supervisor_lost`, preventing PID-reuse attacks.
+- Terminal orchestration and every CLI exit explicitly stop live work and persist the reason.
+  State schema v5 records monotonic output counters plus immutable exit/reason/end metadata.
+
 Remaining open items:
 
-- Whether background processes (`run-command-background`) need a heartbeat tag so the
-  interpreter knows a dev server is still alive between turns.
+- Whether a future network-service capability should retain and join a dedicated isolated network
+  namespace so a dev server can be tested without exposing host networking. Phase 13 remains
+  socket-denied and does not claim dev-server support.
 - How dependency installation should grant narrowly scoped network access, verify provenance,
   and promote package state without exposing user credentials or package caches.
 - Whether a future reviewed-patch workflow should allow selected command-generated changes to be

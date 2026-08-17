@@ -49,7 +49,7 @@ process running as the file owner could otherwise change permission bits.
 - Ordered result history
 - Every action ID accepted for dispatch, including attempts that returned an error
 - Chunk sequence state
-- Background-process handles and output offsets
+- Background-process handles, bounded output counters, lifecycle reasons, and terminal metadata
 - One exact destructive action awaiting human confirmation, including its target guard
 
 Updates use an exclusive per-session lock, an optimistic revision check, file `fsync`, atomic
@@ -59,9 +59,10 @@ The state loader validates the complete JSON schema and rejects mismatched IDs, 
 duplicate records, impossible timestamps, input-root chunks, broad state-file permissions, or a
 writable/tampered input tree.
 
-The current state schema is version 4. Versions 1 through 3 remain readable and are upgraded on
+The current state schema is version 5. Versions 1 through 4 remain readable and are upgraded on
 the next state update; older completed-result history seeds the durable used-action-ID set.
-Version 4 adds the optional pending-confirmation record.
+Version 4 added the optional pending-confirmation record. Version 5 adds background output bytes,
+line bounds, exit codes, termination reasons, end timestamps, and the terminal `lost` state.
 
 ## Lifecycle operations
 
@@ -87,6 +88,13 @@ waiting at an exhausted limit; this keeps budget approval on the human-facing AP
 session to `waiting_user`. A normal status transition cannot reopen it as active; orchestration
 must approve/deny the exact persisted action, or abort. Successful approval and denial both
 clear the pending record while recording the result. Terminal abort/completion also clear it.
+
+Process PIDs are diagnostic data, not durable authority. Only the in-memory supervisor object
+that launched a process may signal it. After an interpreter restart, a record still marked
+`running` is reconciled to `lost` with reason `supervisor_lost`; the stored PID is never reused.
+Output offsets and byte counts move only forward, and terminal status/reason/exit metadata is
+immutable. This prevents PID reuse or state replay from turning `kill-process` into an arbitrary
+host signal.
 
 None of these methods execute an AEML action or resolve an LLM-provided filesystem path. Policy,
 tool execution, and orchestration remain separate boundaries.

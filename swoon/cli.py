@@ -13,7 +13,13 @@ from .orchestration import (
     RunResult,
     RunStopReason,
 )
-from .session import DEFAULT_MAX_STEPS, Session, SessionManager, SessionStatus
+from .session import (
+    DEFAULT_MAX_STEPS,
+    ProcessTerminationReason,
+    Session,
+    SessionManager,
+    SessionStatus,
+)
 from .transport import AEMLChatChannel, ChatGPTWebTransport
 from .tools import AgentToolDispatcher
 
@@ -141,6 +147,7 @@ def _run_chat(args: argparse.Namespace) -> int:
         return EXIT_USAGE
 
     client = None
+    exit_code = EXIT_RUNTIME_ERROR
     try:
         client = _transport(args)
         client.start()
@@ -191,6 +198,9 @@ def _run_agent(args: argparse.Namespace) -> int:
     try:
         manager = SessionManager(args.session_dir)
         session = manager.load(args.resume) if args.resume else None
+        dispatcher = AgentToolDispatcher(manager)
+        if session is not None:
+            dispatcher.reconcile_background(session)
     except Exception as error:
         _report_error(error)
         return EXIT_RUNTIME_ERROR
@@ -276,7 +286,6 @@ def _run_agent(args: argparse.Namespace) -> int:
     try:
         client = _transport(args)
         client.start()
-        dispatcher = AgentToolDispatcher(manager)
         prompt_builder = AEMLPromptBuilder(dispatcher.tool_specs)
         orchestrator = AgentOrchestrator(
             manager,
@@ -295,7 +304,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             additional_steps=args.additional_steps,
             confirmation=initial_confirmation,
         )
-        return _drive_agent_outcome(
+        exit_code = _drive_agent_outcome(
             manager,
             orchestrator,
             outcome,
@@ -304,9 +313,18 @@ def _run_agent(args: argparse.Namespace) -> int:
         )
     except Exception as error:
         _report_error(error)
-        return EXIT_RUNTIME_ERROR
+        exit_code = EXIT_RUNTIME_ERROR
     finally:
+        try:
+            dispatcher.shutdown_background(
+                manager.load(session.id),
+                reason=ProcessTerminationReason.HOST_EXIT,
+            )
+        except Exception as error:
+            _report_error(error)
+            exit_code = EXIT_RUNTIME_ERROR
         _close_transport(client)
+    return exit_code
 
 
 def _drive_agent_outcome(
@@ -344,6 +362,10 @@ def _drive_agent_outcome(
                 _report_input_required(outcome.session, "a human answer")
                 return EXIT_INPUT_REQUIRED
             if answer in _ABORT_COMMANDS:
+                orchestrator.shutdown_background(
+                    outcome.session,
+                    reason=ProcessTerminationReason.SESSION_END,
+                )
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
                 print("Session aborted by the user.", file=sys.stderr)
                 return EXIT_ABORTED
@@ -368,6 +390,10 @@ def _drive_agent_outcome(
                 return EXIT_INPUT_REQUIRED
             decision, abort = _read_pending_confirmation(outcome.session)
             if abort:
+                orchestrator.shutdown_background(
+                    outcome.session,
+                    reason=ProcessTerminationReason.SESSION_END,
+                )
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
                 print("Session aborted by the user.", file=sys.stderr)
                 return EXIT_ABORTED
@@ -395,6 +421,10 @@ def _drive_agent_outcome(
                 return EXIT_INPUT_REQUIRED
             additional_steps, abort = _read_step_extension(outcome.session)
             if abort:
+                orchestrator.shutdown_background(
+                    outcome.session,
+                    reason=ProcessTerminationReason.SESSION_END,
+                )
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
                 print("Session aborted by the user.", file=sys.stderr)
                 return EXIT_ABORTED

@@ -8,8 +8,9 @@ Phase 12 adds four executing capabilities to `AgentToolDispatcher`:
 - `run-linter`
 
 They are foreground verification tools. Every invocation blocks until the command exits, reaches
-its hard timeout, or exceeds its capture bound. Background processes, environment mutation,
-package installation/removal, network access, and Git execution remain disabled.
+its hard timeout, or exceeds its capture bound. Phase 13 reuses this exact offline disposable
+sandbox for supervised background work. Environment mutation, package installation/removal,
+network access, and Git execution remain disabled.
 
 ## Disposable execution model
 

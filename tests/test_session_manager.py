@@ -11,6 +11,7 @@ from swoon.aeml.models import Action, Argument, PathRef, Result, ResultStatus, R
 from swoon.session import (
     ImportLimits,
     ProcessStatus,
+    ProcessTerminationReason,
     SessionConflictError,
     SessionError,
     SessionImportError,
@@ -206,7 +207,7 @@ class SessionManagerTests(unittest.TestCase):
         self.manager.set_plan(loaded, "upgrade")
 
         upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["version"], 4)
+        self.assertEqual(upgraded["version"], 5)
         self.assertIn("action_digest", upgraded["action_ledger"][0])
         self.assertEqual(upgraded["used_action_ids"], ["a1"])
 
@@ -229,7 +230,7 @@ class SessionManagerTests(unittest.TestCase):
         self.manager.set_plan(loaded, "upgrade")
 
         upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["version"], 4)
+        self.assertEqual(upgraded["version"], 5)
         self.assertEqual(upgraded["used_action_ids"], ["a1"])
 
     def test_version_three_state_is_loaded_and_upgraded_on_update(self) -> None:
@@ -245,7 +246,7 @@ class SessionManagerTests(unittest.TestCase):
         self.manager.set_plan(loaded, "upgrade")
 
         upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["version"], 4)
+        self.assertEqual(upgraded["version"], 5)
         self.assertIsNone(upgraded["pending_confirmation"])
 
     def test_action_ids_can_be_reserved_before_a_failed_attempt(self) -> None:
@@ -392,10 +393,88 @@ class SessionManagerTests(unittest.TestCase):
         self.assertEqual(process.pid, 1234)
         self.assertEqual(process.status, ProcessStatus.EXITED)
         self.assertEqual(process.output_offset, 88)
+        self.assertEqual(process.output_bytes, 88)
+        self.assertEqual(process.exit_code, 0)
+        self.assertEqual(
+            process.termination_reason,
+            ProcessTerminationReason.EXITED,
+        )
+        self.assertIsNotNone(process.ended_at)
 
         with self.assertRaises(SessionError) as raised:
             self.manager.update_process(session, handle, status=ProcessStatus.RUNNING)
         self.assertEqual(raised.exception.code, "invalid_process_transition")
+
+    def test_process_terminal_metadata_is_strict_and_immutable(self) -> None:
+        session = self.manager.create(session_id="sess_process_metadata")
+        handle = self.manager.register_process(
+            session,
+            pid=1234,
+            handle="proc_metadata",
+            max_output_lines=25,
+        )
+        self.manager.update_process(
+            session,
+            handle,
+            status=ProcessStatus.KILLED,
+            output_bytes=12,
+            exit_code=-9,
+            termination_reason=ProcessTerminationReason.OUTPUT_LIMIT,
+        )
+
+        process = self.manager.load(session.id).state.process(handle)
+        self.assertEqual(process.max_output_lines, 25)
+        self.assertEqual(process.output_bytes, 12)
+        self.assertEqual(
+            process.termination_reason,
+            ProcessTerminationReason.OUTPUT_LIMIT,
+        )
+
+        with self.assertRaises(SessionError) as raised:
+            self.manager.update_process(session, handle, exit_code=0)
+        self.assertEqual(raised.exception.code, "invalid_process_transition")
+
+    def test_version_four_process_record_migrates_to_version_five(self) -> None:
+        session = self.manager.create(session_id="sess_v4_process")
+        handle = self.manager.register_process(
+            session,
+            pid=4321,
+            handle="proc_legacy",
+        )
+        self.manager.update_process(
+            session,
+            handle,
+            status=ProcessStatus.KILLED,
+            output_offset=7,
+        )
+        raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        raw["version"] = 4
+        for process in raw["processes"]:
+            for key in (
+                "output_bytes",
+                "max_output_lines",
+                "exit_code",
+                "termination_reason",
+                "ended_at",
+            ):
+                process.pop(key)
+        session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
+        session.paths.state_file.chmod(0o600)
+
+        loaded = self.manager.load(session.id)
+        process = loaded.state.process(handle)
+        self.assertEqual(process.output_bytes, 7)
+        self.assertEqual(process.max_output_lines, 100_000)
+        self.assertEqual(process.status, ProcessStatus.KILLED)
+        self.assertEqual(
+            process.termination_reason,
+            ProcessTerminationReason.SUPERVISOR_ERROR,
+        )
+        self.manager.set_plan(loaded, "migrated")
+
+        upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(upgraded["version"], 5)
+        self.assertEqual(upgraded["processes"][0]["output_bytes"], 7)
 
     def test_terminal_status_cannot_be_reopened(self) -> None:
         session = self.manager.create(session_id="sess_status")

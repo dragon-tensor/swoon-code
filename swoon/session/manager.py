@@ -34,6 +34,7 @@ from .models import (
     ProcessRecord,
     PROCESS_HANDLE_PATTERN,
     ProcessStatus,
+    ProcessTerminationReason,
     Session,
     SessionPaths,
     SessionState,
@@ -299,6 +300,9 @@ class SessionManager:
         chunk_seq: int | None = None,
         chunk_final: bool | None = None,
         resolve_confirmation: bool = False,
+        process_handle: str | None = None,
+        process_output_offset: int | None = None,
+        process_output_bytes: int | None = None,
     ) -> Session:
         if not isinstance(tool, str) or not tool.strip():
             raise SessionError("invalid_action_record", "Tool name cannot be empty")
@@ -336,6 +340,24 @@ class SessionManager:
                 "invalid_action_record",
                 "resolve_confirmation must be boolean",
             )
+        process_values = (
+            process_handle,
+            process_output_offset,
+            process_output_bytes,
+        )
+        if any(value is not None for value in process_values):
+            if (
+                not isinstance(process_handle, str)
+                or not PROCESS_HANDLE_PATTERN.fullmatch(process_handle)
+                or type(process_output_offset) is not int
+                or process_output_offset < 0
+                or type(process_output_bytes) is not int
+                or process_output_bytes < process_output_offset
+            ):
+                raise SessionError(
+                    "invalid_process",
+                    "Process result metadata must contain a valid handle and byte range",
+                )
 
         def mutate(state: SessionState) -> SessionState:
             if resolve_confirmation:
@@ -376,6 +398,32 @@ class SessionManager:
                     chunk_path,
                     seq=chunk_seq,
                     final=chunk_final,
+                )
+            if process_handle is not None:
+                assert process_output_offset is not None
+                assert process_output_bytes is not None
+                process = state.process(process_handle)
+                if process is None:
+                    raise SessionError(
+                        "unknown_process_handle",
+                        f"Unknown process handle {process_handle!r}",
+                    )
+                if process_output_bytes < process.output_bytes:
+                    raise SessionError(
+                        "invalid_process",
+                        "Process output byte count cannot move backwards",
+                    )
+                replacement = replace(
+                    process,
+                    output_offset=max(process.output_offset, process_output_offset),
+                    output_bytes=process_output_bytes,
+                )
+                state = replace(
+                    state,
+                    processes=tuple(
+                        replacement if item.handle == process_handle else item
+                        for item in state.processes
+                    ),
                 )
             return replace(
                 state,
@@ -521,9 +569,24 @@ class SessionManager:
         chunks = tuple(replacement if item.path == path else item for item in state.chunks)
         return replace(state, chunks=chunks)
 
-    def register_process(self, session: Session, *, pid: int, handle: str | None = None) -> str:
+    def register_process(
+        self,
+        session: Session,
+        *,
+        pid: int,
+        handle: str | None = None,
+        max_output_lines: int = 100_000,
+    ) -> str:
         if type(pid) is not int or pid < 1:
             raise SessionError("invalid_process", "Process PID must be a positive integer")
+        if (
+            type(max_output_lines) is not int
+            or not 1 <= max_output_lines <= 100_000
+        ):
+            raise SessionError(
+                "invalid_process",
+                "Process max_output_lines must be between 1 and 100000",
+            )
         process_handle = handle or f"proc_{secrets.token_hex(12)}"
         if not PROCESS_HANDLE_PATTERN.fullmatch(process_handle):
             raise SessionError("invalid_process", "Invalid process handle")
@@ -538,6 +601,7 @@ class SessionManager:
                 status=ProcessStatus.RUNNING,
                 output_offset=0,
                 started_at=self._now(),
+                max_output_lines=max_output_lines,
             )
             return replace(state, processes=state.processes + (process,))
 
@@ -551,11 +615,25 @@ class SessionManager:
         *,
         status: ProcessStatus | None = None,
         output_offset: int | None = None,
+        output_bytes: int | None = None,
+        exit_code: int | None = None,
+        termination_reason: ProcessTerminationReason | None = None,
     ) -> Session:
         if status is not None and not isinstance(status, ProcessStatus):
             raise SessionError("invalid_process", "Unknown process status")
         if output_offset is not None and (type(output_offset) is not int or output_offset < 0):
             raise SessionError("invalid_process", "Output offset must be non-negative")
+        if output_bytes is not None and (type(output_bytes) is not int or output_bytes < 0):
+            raise SessionError("invalid_process", "Output bytes must be non-negative")
+        if exit_code is not None and (
+            type(exit_code) is not int or not -(2**31) <= exit_code < 2**31
+        ):
+            raise SessionError("invalid_process", "Invalid process exit code")
+        if termination_reason is not None and not isinstance(
+            termination_reason,
+            ProcessTerminationReason,
+        ):
+            raise SessionError("invalid_process", "Unknown process termination reason")
 
         def mutate(state: SessionState) -> SessionState:
             existing = state.process(handle)
@@ -566,15 +644,98 @@ class SessionManager:
                     "invalid_process_transition",
                     f"Process {handle!r} is already {existing.status.value}",
                 )
+            if existing.status is not ProcessStatus.RUNNING:
+                if exit_code is not None and exit_code != existing.exit_code:
+                    raise SessionError(
+                        "invalid_process_transition",
+                        "Terminal process exit metadata cannot change",
+                    )
+                if (
+                    termination_reason is not None
+                    and termination_reason is not existing.termination_reason
+                ):
+                    raise SessionError(
+                        "invalid_process_transition",
+                        "Terminal process reason cannot change",
+                    )
+            selected_status = status or existing.status
             if output_offset is not None and output_offset < existing.output_offset:
                 raise SessionError(
                     "invalid_process",
                     "Process output offset cannot move backwards",
                 )
+            selected_output_bytes = (
+                existing.output_bytes if output_bytes is None else output_bytes
+            )
+            if selected_output_bytes < existing.output_bytes:
+                raise SessionError(
+                    "invalid_process",
+                    "Process output byte count cannot move backwards",
+                )
+            selected_offset = (
+                existing.output_offset if output_offset is None else output_offset
+            )
+            selected_output_bytes = max(selected_output_bytes, selected_offset)
+
+            selected_exit_code = (
+                existing.exit_code if exit_code is None else exit_code
+            )
+            selected_reason = termination_reason or existing.termination_reason
+            ended_at = existing.ended_at
+            if selected_status is ProcessStatus.RUNNING:
+                if selected_exit_code is not None or selected_reason is not None:
+                    raise SessionError(
+                        "invalid_process",
+                        "Running process cannot contain terminal metadata",
+                    )
+            else:
+                if ended_at is None:
+                    ended_at = self._now()
+                if selected_status is ProcessStatus.EXITED:
+                    selected_exit_code = 0 if selected_exit_code is None else selected_exit_code
+                    selected_reason = selected_reason or ProcessTerminationReason.EXITED
+                    if selected_reason is not ProcessTerminationReason.EXITED:
+                        raise SessionError(
+                            "invalid_process",
+                            "Exited process has an invalid termination reason",
+                        )
+                elif selected_status is ProcessStatus.KILLED:
+                    selected_exit_code = -9 if selected_exit_code is None else selected_exit_code
+                    selected_reason = selected_reason or ProcessTerminationReason.USER
+                    if selected_reason not in {
+                        ProcessTerminationReason.USER,
+                        ProcessTerminationReason.OUTPUT_LIMIT,
+                        ProcessTerminationReason.RUNTIME_LIMIT,
+                        ProcessTerminationReason.SESSION_END,
+                        ProcessTerminationReason.HOST_EXIT,
+                        ProcessTerminationReason.SUPERVISOR_ERROR,
+                    }:
+                        raise SessionError(
+                            "invalid_process",
+                            "Killed process has an invalid termination reason",
+                        )
+                elif selected_status is ProcessStatus.LOST:
+                    if selected_exit_code is not None:
+                        raise SessionError(
+                            "invalid_process",
+                            "Lost process cannot have an exit code",
+                        )
+                    selected_reason = (
+                        selected_reason or ProcessTerminationReason.SUPERVISOR_LOST
+                    )
+                    if selected_reason is not ProcessTerminationReason.SUPERVISOR_LOST:
+                        raise SessionError(
+                            "invalid_process",
+                            "Lost process has an invalid termination reason",
+                        )
             replacement = replace(
                 existing,
-                status=status or existing.status,
-                output_offset=existing.output_offset if output_offset is None else output_offset,
+                status=selected_status,
+                output_offset=selected_offset,
+                output_bytes=selected_output_bytes,
+                exit_code=selected_exit_code,
+                termination_reason=selected_reason,
+                ended_at=ended_at,
             )
             processes = tuple(
                 replacement if item.handle == handle else item for item in state.processes

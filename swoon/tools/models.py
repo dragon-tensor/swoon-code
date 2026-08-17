@@ -77,6 +77,11 @@ class CommandToolLimits:
     max_file_bytes: int = 256 * 1024 * 1024
     max_processes: int = 256
     max_open_files: int = 256
+    background_max_runtime_seconds: int = 3_600
+    background_startup_timeout_seconds: int = 30
+    background_default_output_lines: int = 10_000
+    max_background_processes: int = 8
+    max_background_records: int = 128
 
     def __post_init__(self) -> None:
         values = (
@@ -97,6 +102,11 @@ class CommandToolLimits:
             self.max_file_bytes,
             self.max_processes,
             self.max_open_files,
+            self.background_max_runtime_seconds,
+            self.background_startup_timeout_seconds,
+            self.background_default_output_lines,
+            self.max_background_processes,
+            self.max_background_records,
         )
         if any(type(value) is not int or value < 1 for value in values):
             raise ValueError("Command-tool limits must be positive integers")
@@ -106,3 +116,7 @@ class CommandToolLimits:
             raise ValueError("max_snapshot_file_bytes cannot exceed max_snapshot_bytes")
         if self.max_file_bytes > self.workspace_bytes:
             raise ValueError("max_file_bytes cannot exceed workspace_bytes")
+        if self.background_default_output_lines > 100_000:
+            raise ValueError("background_default_output_lines cannot exceed 100000")
+        if self.max_background_processes > self.max_background_records:
+            raise ValueError("max_background_processes cannot exceed max_background_records")

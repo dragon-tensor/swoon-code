@@ -24,6 +24,7 @@ Implemented foundations:
 10. Agent CLI with session create/resume and interactive lifecycle handling
 11. Output-only filesystem mutation with atomic file writes and resumable confirmation
 12. Offline foreground command, build, test, and linter sandboxing
+13. Supervised background commands with bounded streaming and handle-scoped termination
 
 The currently executable AEML tools are:
 
@@ -44,15 +45,18 @@ The currently executable AEML tools are:
 - `run-build`
 - `run-tests`
 - `run-linter`
+- `run-command-background` (offline, disposable, and bounded)
+- `stream-output` (opaque handle plus UTF-8 byte offset)
+- `kill-process` (live session-owned handles only)
 
-Writes are confined to the session output root; input stays read-only. Foreground execution is
-offline and runs against filtered disposable snapshots, so command-side filesystem changes never
-persist. Delete/move/chmod, Git mutations, package changes, background processes, and persistent
-environment changes remain disabled. The `swoon agent` command can drive these seventeen
-capabilities until completion, a human question,
-destructive confirmation, a step-limit pause, an explicit abort, or bounded protocol-repair
-exhaustion. The separate `swoon chat` command and legacy `chatgpt.sh` wrapper remain direct
-chatbot relays.
+Writes are confined to the session output root; input stays read-only. Foreground and background
+execution are offline and run against filtered disposable snapshots, so command-side filesystem
+changes never persist. Background work is addressed only by an opaque session handle; it cannot
+survive interpreter shutdown. Delete/move/chmod, Git mutations, package changes, networked
+services, and persistent environment changes remain disabled. The `swoon agent` command can
+drive these twenty capabilities until completion, a human question, destructive confirmation, a
+step-limit pause, an explicit abort, or bounded protocol-repair exhaustion. The separate
+`swoon chat` command and legacy `chatgpt.sh` wrapper remain direct chatbot relays.
 
 ## Setup
 
@@ -62,8 +66,8 @@ python3 -m venv .venv
 .venv/bin/python -m playwright install chromium
 ```
 
-Foreground command tools additionally require compatible `bwrap` and `prlimit` executables on
-64-bit Linux (x86-64 or AArch64). They fail closed rather than falling back to unsandboxed
+Command tools additionally require compatible `bwrap` and `prlimit` executables on 64-bit Linux
+(x86-64 or AArch64). They fail closed rather than falling back to unsandboxed
 execution when those primitives are unavailable.
 
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
@@ -114,10 +118,10 @@ with `--approve-pending` or `--deny-pending`. Neither flag approves future actio
   --non-interactive
 ```
 
-The agent can copy and modify output files and can run offline foreground verification commands.
-Command workspaces are disposable: builds, formatter edits, and other command-side changes are
-discarded. It still cannot delete persistent files, install packages, mutate Git, start background
-processes, or access the network.
+The agent can copy and modify output files, run offline foreground verification, and supervise
+bounded offline background jobs. Command workspaces are disposable: builds, formatter edits, and
+other command-side changes are discarded. It still cannot delete persistent files, install
+packages, mutate Git, expose a network service, or access the network.
 
 ## Browser relay
 
@@ -203,8 +207,8 @@ it. See the orchestration guide for pause/resume examples and exact failure sema
 
 The `swoon agent` command instead opts into `AgentToolDispatcher` and `AgentOrchestrator`, using
 one capability-derived prompt/validator allowlist for the seven reads, six filesystem mutations,
-and four disposable foreground execution tools. See the filesystem-mutation and foreground-command
-guides for the embedding API and safety boundaries.
+four disposable foreground tools, and three supervised background tools. See the filesystem,
+foreground-command, and background-command guides for the embedding API and safety boundaries.
 
 ## Documentation
 
@@ -217,6 +221,7 @@ guides for the embedding API and safety boundaries.
 - `docs/agent-cli.md` — Phase 10 command-line lifecycle and exit codes
 - `docs/filesystem-mutations.md` — Phase 11 write boundary and confirmation lifecycle
 - `docs/foreground-commands.md` — Phase 12 offline foreground execution boundary
+- `docs/background-commands.md` — Phase 13 supervised background lifecycle
 - `MIGRATION.md` — original relay history
 
 ## Tests

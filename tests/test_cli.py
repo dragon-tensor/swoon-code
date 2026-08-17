@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import platform
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -17,7 +19,12 @@ from swoon.cli import (
     legacy_main,
     main,
 )
-from swoon.session import SessionManager, SessionStatus
+from swoon.session import (
+    ProcessStatus,
+    ProcessTerminationReason,
+    SessionManager,
+    SessionStatus,
+)
 
 
 class FakeBrowserTransport:
@@ -89,6 +96,20 @@ class CLITests(unittest.TestCase):
             str(self.sessions),
             *extra,
         ]
+
+    @staticmethod
+    def background_runtime_available() -> bool:
+        return (
+            platform.system() == "Linux"
+            and platform.machine().lower()
+            in {"x86_64", "amd64", "aarch64", "arm64"}
+            and shutil.which("bwrap") is not None
+            and shutil.which("prlimit") is not None
+            and (
+                Path("/usr/bin/python3").exists()
+                or Path("/usr/local/bin/python3").exists()
+            )
+        )
 
     def test_legacy_flags_and_compatibility_entrypoint_still_run_direct_chat(self) -> None:
         for legacy in (False, True):
@@ -175,6 +196,49 @@ class CLITests(unittest.TestCase):
         self.assertIn("Blue selected.", stdout)
         self.assertIn("<user_prompt>Blue</user_prompt>", browser.prompts[1])
         self.assertEqual(stderr, "")
+
+    def test_noninteractive_exit_stops_live_background_process(self) -> None:
+        if not self.background_runtime_available():
+            self.skipTest("Bubblewrap background-command runtime is unavailable")
+        session_id = "sess_cli_background"
+        browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    '<action id="launch1"><tool>run-command-background</tool>'
+                    '<args><cmd><![CDATA[python3 -u -c "import time; '
+                    'print(\'live\'); time.sleep(60)"]]></cmd></args></action>'
+                    '<next>await_result</next></aeml>'
+                ),
+                (
+                    f'<aeml turn="2" session="{session_id}">'
+                    '<ask_user>Continue?</ask_user><next>await_user</next></aeml>'
+                ),
+            ]
+        )
+
+        code, _, stderr = self.invoke(
+            self.agent_args(
+                "--session-id",
+                session_id,
+                "--prompt",
+                "Start a background check",
+                "--non-interactive",
+            ),
+            browser,
+        )
+
+        session = SessionManager(self.sessions).load(session_id)
+        process = session.state.processes[0]
+        self.assertEqual(code, EXIT_INPUT_REQUIRED)
+        self.assertEqual(session.state.status, SessionStatus.WAITING_USER)
+        self.assertEqual(process.status, ProcessStatus.KILLED)
+        self.assertEqual(
+            process.termination_reason,
+            ProcessTerminationReason.HOST_EXIT,
+        )
+        self.assertIn("human answer", stderr)
+        self.assertTrue(browser.closed)
 
     def test_agent_obtains_explicit_step_approval(self) -> None:
         session_id = "sess_cli_steps"

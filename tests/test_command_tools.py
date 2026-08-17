@@ -12,6 +12,7 @@ from swoon.aeml import AEMLContextBuilder, AEMLParser, AEMLPromptBuilder, AEMLVa
 from swoon.aeml.models import PathRef, ProtocolError, Result, ResultStatus, Root
 from swoon.session import SessionManager
 from swoon.tools import (
+    IMPLEMENTED_BACKGROUND_TOOLS,
     IMPLEMENTED_EXECUTION_TOOLS,
     AgentToolDispatcher,
     CommandToolLimits,
@@ -84,17 +85,20 @@ class ForegroundCommandToolTests(unittest.TestCase):
     def execute(self, action_id: str, body: str):
         return self.dispatcher.execute(self.action(action_id, body), self.session)
 
-    def test_agent_allowlist_enables_only_foreground_execution_phase(self) -> None:
+    def test_agent_allowlist_enables_foreground_and_background_execution(self) -> None:
         self.assertEqual(
             IMPLEMENTED_EXECUTION_TOOLS,
             {"run-command", "run-build", "run-tests", "run-linter"},
         )
         for name in IMPLEMENTED_EXECUTION_TOOLS:
             self.assertIn(name, self.dispatcher.tool_specs)
+        self.assertEqual(
+            IMPLEMENTED_BACKGROUND_TOOLS,
+            {"run-command-background", "kill-process", "stream-output"},
+        )
+        for name in IMPLEMENTED_BACKGROUND_TOOLS:
+            self.assertIn(name, self.dispatcher.tool_specs)
         for name in (
-            "run-command-background",
-            "kill-process",
-            "stream-output",
             "install-dependency",
             "remove-dependency",
             "set-env",
@@ -103,9 +107,12 @@ class ForegroundCommandToolTests(unittest.TestCase):
         prompt = AEMLPromptBuilder(self.dispatcher.tool_specs).initial(
             AEMLContextBuilder().build(self.session, turn=1, user_prompt="Verify output")
         )
-        self.assertIn('<available_tools count="17">', prompt)
+        self.assertIn('<available_tools count="20">', prompt)
         self.assertIn('name="run-command" effect="executing"', prompt)
+        self.assertIn('name="run-command-background" effect="executing"', prompt)
+        self.assertIn('name="stream-output" effect="read_only"', prompt)
         self.assertIn("filesystem changes are discarded", prompt.lower())
+        self.assertIn("opaque handle", prompt.lower())
 
     def test_command_reads_seed_but_all_workspace_changes_are_discarded(self) -> None:
         self.require_runtime()
@@ -315,6 +322,10 @@ class ForegroundCommandToolTests(unittest.TestCase):
                 ("run-build", ""),
                 ("run-tests", ""),
                 ("run-linter", ""),
+                (
+                    "run-command-background",
+                    "<cmd>python3 partial.py</cmd>",
+                ),
             ),
             start=1,
         ):

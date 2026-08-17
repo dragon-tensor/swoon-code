@@ -23,8 +23,8 @@ from swoon.aeml.models import (
 from .errors import SessionError
 
 
-STATE_VERSION = 4
-SUPPORTED_STATE_VERSIONS = frozenset({1, 2, 3, STATE_VERSION})
+STATE_VERSION = 5
+SUPPORTED_STATE_VERSIONS = frozenset({1, 2, 3, 4, STATE_VERSION})
 SESSION_ID_PATTERN = re.compile(r"sess_[A-Za-z0-9_-]{1,64}\Z")
 ACTION_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 TOOL_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
@@ -44,6 +44,18 @@ class ProcessStatus(str, Enum):
     RUNNING = "running"
     EXITED = "exited"
     KILLED = "killed"
+    LOST = "lost"
+
+
+class ProcessTerminationReason(str, Enum):
+    EXITED = "exited"
+    USER = "user"
+    OUTPUT_LIMIT = "output_limit"
+    RUNTIME_LIMIT = "runtime_limit"
+    SESSION_END = "session_end"
+    HOST_EXIT = "host_exit"
+    SUPERVISOR_ERROR = "supervisor_error"
+    SUPERVISOR_LOST = "supervisor_lost"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +94,11 @@ class ProcessRecord:
     status: ProcessStatus
     output_offset: int
     started_at: datetime
+    output_bytes: int = 0
+    max_output_lines: int = 100_000
+    exit_code: int | None = None
+    termination_reason: ProcessTerminationReason | None = None
+    ended_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,7 +287,10 @@ class SessionState:
         if len(chunk_keys) != len(set(chunk_keys)):
             raise SessionError("invalid_session_state", "Chunk state contains duplicate paths")
 
-        processes = tuple(_process_from_dict(item) for item in _required_list(raw, "processes"))
+        processes = tuple(
+            _process_from_dict(item, version=version)
+            for item in _required_list(raw, "processes")
+        )
         handles = [item.handle for item in processes]
         if len(handles) != len(set(handles)):
             raise SessionError("invalid_session_state", "Process state contains duplicate handles")
@@ -652,18 +672,38 @@ def _process_to_dict(record: ProcessRecord) -> dict[str, Any]:
         "pid": record.pid,
         "status": record.status.value,
         "output_offset": record.output_offset,
+        "output_bytes": record.output_bytes,
+        "max_output_lines": record.max_output_lines,
+        "exit_code": record.exit_code,
+        "termination_reason": (
+            None
+            if record.termination_reason is None
+            else record.termination_reason.value
+        ),
         "started_at": _timestamp(record.started_at),
+        "ended_at": None if record.ended_at is None else _timestamp(record.ended_at),
     }
 
 
-def _process_from_dict(raw: Any) -> ProcessRecord:
-    if not isinstance(raw, dict) or set(raw) != {
+def _process_from_dict(raw: Any, *, version: int) -> ProcessRecord:
+    expected = {
         "handle",
         "pid",
         "status",
         "output_offset",
         "started_at",
-    }:
+    }
+    if version >= 5:
+        expected.update(
+            {
+                "output_bytes",
+                "max_output_lines",
+                "exit_code",
+                "termination_reason",
+                "ended_at",
+            }
+        )
+    if not isinstance(raw, dict) or set(raw) != expected:
         raise SessionError("invalid_session_state", "Invalid process record")
     try:
         status = ProcessStatus(_required_string(raw, "status"))
@@ -672,10 +712,117 @@ def _process_from_dict(raw: Any) -> ProcessRecord:
     handle = _required_string(raw, "handle")
     if not PROCESS_HANDLE_PATTERN.fullmatch(handle):
         raise SessionError("invalid_session_state", "Invalid process handle")
+    output_offset = _nonnegative_integer(raw, "output_offset")
+    output_bytes = (
+        _nonnegative_integer(raw, "output_bytes")
+        if version >= 5
+        else output_offset
+    )
+    if output_offset > output_bytes:
+        raise SessionError(
+            "invalid_session_state",
+            "Process output offset exceeds available output bytes",
+        )
+    max_output_lines = (
+        _positive_integer(raw, "max_output_lines")
+        if version >= 5
+        else 100_000
+    )
+    if max_output_lines > 100_000:
+        raise SessionError(
+            "invalid_session_state",
+            "Process max_output_lines exceeds 100000",
+        )
+    exit_code = raw.get("exit_code")
+    if exit_code is not None and (
+        type(exit_code) is not int or not -(2**31) <= exit_code < 2**31
+    ):
+        raise SessionError("invalid_session_state", "Invalid process exit code")
+    reason = None
+    if raw.get("termination_reason") is not None:
+        try:
+            reason = ProcessTerminationReason(_required_string(raw, "termination_reason"))
+        except ValueError as error:
+            raise SessionError(
+                "invalid_session_state",
+                "Invalid process termination reason",
+            ) from error
+    ended_at = (
+        _datetime(raw, "ended_at")
+        if version >= 5 and raw["ended_at"] is not None
+        else None
+    )
+    started_at = _datetime(raw, "started_at")
+    if version < 5 and status is not ProcessStatus.RUNNING:
+        ended_at = started_at
+        if status is ProcessStatus.EXITED:
+            exit_code = 0
+            reason = ProcessTerminationReason.EXITED
+        elif status is ProcessStatus.KILLED:
+            exit_code = -9
+            reason = ProcessTerminationReason.SUPERVISOR_ERROR
+    if ended_at is not None and ended_at < started_at:
+        raise SessionError(
+            "invalid_session_state",
+            "Process ended_at precedes started_at",
+        )
+    if status is ProcessStatus.RUNNING and (
+        exit_code is not None or reason is not None or ended_at is not None
+    ):
+        raise SessionError(
+            "invalid_session_state",
+            "Running process contains terminal metadata",
+        )
+    if status is ProcessStatus.EXITED and reason not in {
+        ProcessTerminationReason.EXITED,
+    }:
+        raise SessionError(
+            "invalid_session_state",
+            "Exited process has an invalid termination reason",
+        )
+    if status is ProcessStatus.EXITED and (exit_code is None or ended_at is None):
+        raise SessionError(
+            "invalid_session_state",
+            "Exited process is missing terminal metadata",
+        )
+    if status is ProcessStatus.KILLED and reason not in {
+        ProcessTerminationReason.USER,
+        ProcessTerminationReason.OUTPUT_LIMIT,
+        ProcessTerminationReason.RUNTIME_LIMIT,
+        ProcessTerminationReason.SESSION_END,
+        ProcessTerminationReason.HOST_EXIT,
+        ProcessTerminationReason.SUPERVISOR_ERROR,
+    }:
+        raise SessionError(
+            "invalid_session_state",
+            "Killed process has an invalid termination reason",
+        )
+    if status is ProcessStatus.KILLED and (exit_code is None or ended_at is None):
+        raise SessionError(
+            "invalid_session_state",
+            "Killed process is missing terminal metadata",
+        )
+    if status is ProcessStatus.LOST and reason not in {
+        ProcessTerminationReason.SUPERVISOR_LOST,
+    }:
+        raise SessionError(
+            "invalid_session_state",
+            "Lost process has an invalid termination reason",
+        )
+    if status is ProcessStatus.LOST and (exit_code is not None or ended_at is None):
+        raise SessionError(
+            "invalid_session_state",
+            "Lost process has invalid terminal metadata",
+        )
     return ProcessRecord(
         handle=handle,
         pid=_positive_integer(raw, "pid"),
         status=status,
-        output_offset=_nonnegative_integer(raw, "output_offset"),
-        started_at=_datetime(raw, "started_at"),
+        output_offset=output_offset,
+        started_at=started_at,
+        output_bytes=output_bytes,
+        max_output_lines=max_output_lines,
+        exit_code=exit_code,
+        termination_reason=reason,
+        ended_at=ended_at,
     )

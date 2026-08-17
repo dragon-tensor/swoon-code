@@ -24,8 +24,16 @@ from swoon.aeml.errors import AEMLValidationError
 from swoon.aeml.tool_registry import TOOL_SPECS
 from swoon.aeml.validator import AEMLValidator
 from swoon.policy import PathPolicy, PathPolicyError
-from swoon.session import Session, SessionError, SessionManager, SessionStatus
+from swoon.session import (
+    ProcessTerminationReason,
+    Session,
+    SessionError,
+    SessionManager,
+    SessionStatus,
+)
+from swoon.session.models import PROCESS_HANDLE_PATTERN
 
+from .background import BackgroundProcessTools
 from .dependencies import DependencyReadTools
 from .commands import ForegroundCommandTools
 from .errors import ToolExecutionError
@@ -65,8 +73,18 @@ IMPLEMENTED_EXECUTION_TOOLS = frozenset(
         "run-linter",
     }
 )
+IMPLEMENTED_BACKGROUND_TOOLS = frozenset(
+    {
+        "run-command-background",
+        "kill-process",
+        "stream-output",
+    }
+)
 IMPLEMENTED_AGENT_TOOLS = (
-    IMPLEMENTED_READ_TOOLS | IMPLEMENTED_MUTATION_TOOLS | IMPLEMENTED_EXECUTION_TOOLS
+    IMPLEMENTED_READ_TOOLS
+    | IMPLEMENTED_MUTATION_TOOLS
+    | IMPLEMENTED_EXECUTION_TOOLS
+    | IMPLEMENTED_BACKGROUND_TOOLS
 )
 
 
@@ -172,31 +190,47 @@ class ReadOnlyToolDispatcher:
                 )
 
         policy = PathPolicy(session.paths)
-        handler = self._handler(action, policy, confirmed=confirmed)
+        handler = self._handler(action, policy, session=session, confirmed=confirmed)
         if isinstance(handler, ProtocolError):
             return handler
 
         last_error: ToolExecutionError | None = None
-        attempts = 2 if action.spec.effect is ToolEffect.READ_ONLY else 1
+        attempts = (
+            2
+            if action.spec.effect is ToolEffect.READ_ONLY
+            and action.spec.name != "stream-output"
+            else 1
+        )
         for attempt in range(attempts):
             try:
                 result = handler(action)
                 chunk = action.source.chunk
                 pending = session.state.pending_confirmation
-                self.session_manager.record_action_result(
-                    session,
-                    action.spec.name,
-                    result,
-                    action_digest=action_digest,
-                    chunk_path=action.source.path if chunk is not None else None,
-                    chunk_seq=chunk.seq if chunk is not None else None,
-                    chunk_final=chunk.final if chunk is not None else None,
-                    resolve_confirmation=(
-                        confirmed
-                        and pending is not None
-                        and pending.action.id == action.source.id
-                    ),
-                )
+                process_metadata = self._process_result_metadata(action, result)
+                try:
+                    self.session_manager.record_action_result(
+                        session,
+                        action.spec.name,
+                        result,
+                        action_digest=action_digest,
+                        chunk_path=action.source.path if chunk is not None else None,
+                        chunk_seq=chunk.seq if chunk is not None else None,
+                        chunk_final=chunk.final if chunk is not None else None,
+                        resolve_confirmation=(
+                            confirmed
+                            and pending is not None
+                            and pending.action.id == action.source.id
+                        ),
+                        process_handle=process_metadata[0],
+                        process_output_offset=process_metadata[1],
+                        process_output_bytes=process_metadata[2],
+                    )
+                except Exception:
+                    try:
+                        self._cleanup_unpersisted_result(action, session, result)
+                    except Exception:
+                        pass
+                    raise
                 return result
             except PathPolicyError as error:
                 last_error = ToolExecutionError(
@@ -271,8 +305,10 @@ class ReadOnlyToolDispatcher:
         action: ValidatedAction,
         policy: PathPolicy,
         *,
+        session: Session,
         confirmed: bool,
     ):
+        del session
         del confirmed
         filesystem = FilesystemReadTools(policy, self.limits)
         if action.spec.name == "read-file":
@@ -417,7 +453,10 @@ class ReadOnlyToolDispatcher:
             return None
         if action.spec.name in {"git-diff", "list-dependencies"}:
             return f"{action.spec.name} is blocked by an unfinished output write"
-        if action.spec.name in IMPLEMENTED_EXECUTION_TOOLS:
+        if (
+            action.spec.name in IMPLEMENTED_EXECUTION_TOOLS
+            or action.spec.name == "run-command-background"
+        ):
             return f"{action.spec.name} is blocked by an unfinished output write"
         if action.spec.name in {"create-file", "overwrite-file", "edit-file"}:
             path = action.source.path
@@ -479,6 +518,22 @@ class ReadOnlyToolDispatcher:
         del session
         return None
 
+    def _cleanup_unpersisted_result(
+        self,
+        action: ValidatedAction,
+        session: Session,
+        result: Result,
+    ) -> None:
+        del action, session, result
+
+    def _process_result_metadata(
+        self,
+        action: ValidatedAction,
+        result: Result,
+    ) -> tuple[str | None, int | None, int | None]:
+        del action, result
+        return None, None, None
+
     @staticmethod
     def action_digest(action: ValidatedAction) -> str:
         def value(item):
@@ -511,7 +566,7 @@ class ReadOnlyToolDispatcher:
 
 
 class AgentToolDispatcher(ReadOnlyToolDispatcher):
-    """Execute reads, output mutations, and disposable foreground commands."""
+    """Execute reads, output mutations, and disposable sandboxed commands."""
 
     implemented_tools = IMPLEMENTED_AGENT_TOOLS
     allowed_effects = frozenset(
@@ -542,6 +597,7 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
         action: ValidatedAction,
         policy: PathPolicy,
         *,
+        session: Session,
         confirmed: bool,
     ):
         if action.spec.name in IMPLEMENTED_MUTATION_TOOLS:
@@ -571,7 +627,131 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
                 "run-tests": commands.run_tests,
                 "run-linter": commands.run_linter,
             }[action.spec.name]
-        return super()._handler(action, policy, confirmed=confirmed)
+        if action.spec.name in IMPLEMENTED_BACKGROUND_TOOLS:
+            background = self._background_tools(policy)
+            return {
+                "run-command-background": lambda selected: background.launch(
+                    selected,
+                    session,
+                ),
+                "stream-output": lambda selected: background.stream_output(
+                    selected,
+                    session,
+                ),
+                "kill-process": lambda selected: background.kill_process(
+                    selected,
+                    session,
+                ),
+            }[action.spec.name]
+        return super()._handler(
+            action,
+            policy,
+            session=session,
+            confirmed=confirmed,
+        )
+
+    def reconcile_background(self, session: Session) -> None:
+        """Refresh persisted process state without trusting persisted PIDs."""
+
+        self._validate_managed_session(session)
+        self._background_tools(PathPolicy(session.paths)).reconcile_session(session)
+
+    def shutdown_background(
+        self,
+        session: Session,
+        *,
+        reason: ProcessTerminationReason = ProcessTerminationReason.SESSION_END,
+    ) -> None:
+        """Terminate and persist every live process owned for one session."""
+
+        self._validate_managed_session(session)
+        if reason not in {
+            ProcessTerminationReason.USER,
+            ProcessTerminationReason.OUTPUT_LIMIT,
+            ProcessTerminationReason.RUNTIME_LIMIT,
+            ProcessTerminationReason.SESSION_END,
+            ProcessTerminationReason.HOST_EXIT,
+            ProcessTerminationReason.SUPERVISOR_ERROR,
+        }:
+            raise SessionError(
+                "invalid_process",
+                "Invalid background shutdown reason",
+            )
+        self._background_tools(PathPolicy(session.paths)).shutdown_session(
+            session,
+            reason=reason,
+        )
+
+    def _background_tools(self, policy: PathPolicy) -> BackgroundProcessTools:
+        return BackgroundProcessTools(
+            policy,
+            self.command_limits,
+            self.session_manager,
+            sandbox_binary=self.sandbox_binary,
+            resource_limiter_binary=self.resource_limiter_binary,
+            python_binary=self.sandbox_python_binary,
+        )
+
+    def _validate_managed_session(self, session: Session) -> None:
+        if not isinstance(session, Session):
+            raise SessionError("invalid_session", "A managed Session is required")
+        if session.paths != self.session_manager.paths(session.id):
+            raise SessionError(
+                "session_integrity_error",
+                "Session belongs to another SessionManager",
+            )
+
+    def _cleanup_unpersisted_result(
+        self,
+        action: ValidatedAction,
+        session: Session,
+        result: Result,
+    ) -> None:
+        if action.spec.name != "run-command-background":
+            return
+        first_line = result.body.split("\n", 1)[0]
+        if not first_line.startswith("handle="):
+            return
+        handle = first_line.removeprefix("handle=")
+        if not PROCESS_HANDLE_PATTERN.fullmatch(handle):
+            return
+        self._background_tools(PathPolicy(session.paths)).terminate_unreported(
+            session,
+            handle,
+        )
+
+    def _process_result_metadata(
+        self,
+        action: ValidatedAction,
+        result: Result,
+    ) -> tuple[str | None, int | None, int | None]:
+        if action.spec.name != "stream-output":
+            return None, None, None
+        handle = action.argument("handle")
+        if not isinstance(handle, str) or not PROCESS_HANDLE_PATTERN.fullmatch(handle):
+            raise SessionError("invalid_process", "Invalid process stream handle")
+        header = result.body.split("output:\n", 1)[0]
+        fields: dict[str, str] = {}
+        for line in header.splitlines():
+            name, separator, value = line.partition("=")
+            if separator:
+                fields[name] = value
+        if fields.get("handle") != handle:
+            raise SessionError("invalid_process", "Process stream result handle changed")
+        try:
+            next_offset = int(fields["next_offset"])
+            output_bytes = int(fields["output_bytes"])
+        except (KeyError, ValueError) as error:
+            raise SessionError(
+                "invalid_process",
+                "Process stream result has invalid byte metadata",
+            ) from error
+        if next_offset < 0 or output_bytes < next_offset:
+            raise SessionError(
+                "invalid_process",
+                "Process stream result has an invalid byte range",
+            )
+        return handle, next_offset, output_bytes
 
     def _runtime_confirmation(
         self,

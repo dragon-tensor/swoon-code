@@ -5,13 +5,14 @@ Phase 10 exposed the bounded engine as `swoon agent` while preserving the origin
 `create-file`, `overwrite-file`, `append-file`, `edit-file`, `copy-file`, and `copy-dir`, in
 addition to the seven read tools. Phase 12 adds four offline foreground tools: `run-command`,
 `run-build`, `run-tests`, and `run-linter`. Their filesystems are disposable, so only explicit
-filesystem tools persist output changes. Background commands, package operations, Git mutations,
-and the remaining mutating schemas stay disabled.
+filesystem tools persist output changes. Phase 13 adds `run-command-background`, `stream-output`,
+and `kill-process` with the same disposable, offline boundary. Package operations, Git mutations,
+networked services, and the remaining mutating schemas stay disabled.
 
 On supported 64-bit Linux hosts, foreground execution requires `bwrap`, `prlimit`, and a system
 `python3`. Missing sandbox primitives return a tool error to the agent; the CLI never falls back
-to running a command directly on the host. See `foreground-commands.md` for exact isolation and
-result semantics.
+to running a command directly on the host. See `foreground-commands.md` and
+`background-commands.md` for exact isolation and lifecycle semantics.
 
 ## Create a session
 
@@ -131,7 +132,9 @@ exhausted. A non-exhausted `<ask_user>` pause does not permit a budget extension
 
 On exit 6, the session remains `waiting_user` and can be resumed. Protocol exhaustion persists
 `aborted`; a transport error leaves the session active and retains any step already started by
-the orchestrator.
+the orchestrator. Before any CLI exit, live background work is terminated and its final status is
+persisted with reason `host_exit`. Agent completion or abort uses `session_end`. A later CLI
+process never signals a PID loaded from disk; a stale running record becomes `lost` instead.
 
 ## Direct chat compatibility
 

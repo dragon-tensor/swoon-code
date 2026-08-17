@@ -55,7 +55,8 @@ not author email.
 
 This fixed Git subprocess remains narrower than Phase 12's separate `run-command` capability.
 `ReadOnlyToolDispatcher` still rejects general commands; only `AgentToolDispatcher` opts into the
-offline disposable OS sandbox described in `foreground-commands.md`.
+offline disposable OS sandbox described in `foreground-commands.md` and the supervised lifecycle
+described in `background-commands.md`.
 
 ## Dependency inspection
 

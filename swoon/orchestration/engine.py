@@ -24,12 +24,19 @@ from swoon.aeml.models import (
     ToolEffect,
     ValidatedMessage,
 )
-from swoon.session import Session, SessionManager, SessionStatus
+from swoon.session import (
+    ProcessTerminationReason,
+    Session,
+    SessionError,
+    SessionManager,
+    SessionStatus,
+)
 from swoon.session.models import ACTION_ID_PATTERN
 from swoon.tools import (
     AgentToolDispatcher,
     ConfirmationRequest,
     ReadOnlyToolDispatcher,
+    ToolExecutionError,
 )
 from swoon.transport import AEMLChatChannel
 
@@ -236,7 +243,7 @@ class AEMLOrchestrator:
             )
             next_user_prompt = None
             if protocol_failure is not None:
-                self.session_manager.set_status(session, SessionStatus.ABORTED)
+                self._set_terminal_status(session, SessionStatus.ABORTED)
                 return RunResult(
                     session=session,
                     reason=RunStopReason.PROTOCOL_ERROR,
@@ -254,7 +261,7 @@ class AEMLOrchestrator:
                 updates.append(source.say)
 
             if source.complete is not None:
-                self.session_manager.set_status(session, SessionStatus.COMPLETED)
+                self._set_terminal_status(session, SessionStatus.COMPLETED)
                 self._publish_updates(source.say, source.complete)
                 return RunResult(
                     session=session,
@@ -276,7 +283,7 @@ class AEMLOrchestrator:
                 )
 
             if source.next is NextDirective.DONE:
-                self.session_manager.set_status(session, SessionStatus.COMPLETED)
+                self._set_terminal_status(session, SessionStatus.COMPLETED)
                 self._publish_updates(source.say)
                 return RunResult(
                     session=session,
@@ -286,7 +293,7 @@ class AEMLOrchestrator:
                 )
 
             if source.next is NextDirective.ABORT:
-                self.session_manager.set_status(session, SessionStatus.ABORTED)
+                self._set_terminal_status(session, SessionStatus.ABORTED)
                 self._publish_updates(source.say)
                 return RunResult(
                     session=session,
@@ -339,6 +346,17 @@ class AEMLOrchestrator:
                 pending_errors = ()
             pending_notices = ()
             self._publish_updates(source.say)
+
+    def _set_terminal_status(
+        self,
+        session: Session,
+        status: SessionStatus,
+    ) -> None:
+        self._before_terminal(session)
+        self.session_manager.set_status(session, status)
+
+    def _before_terminal(self, session: Session) -> None:
+        del session
 
     def _exchange_with_retries(
         self,
@@ -586,3 +604,25 @@ class AgentOrchestrator(AEMLOrchestrator):
             limits=limits,
             message_sink=message_sink,
         )
+
+    def shutdown_background(
+        self,
+        session: Session,
+        *,
+        reason: ProcessTerminationReason = ProcessTerminationReason.HOST_EXIT,
+    ) -> None:
+        dispatcher = self.dispatcher
+        assert isinstance(dispatcher, AgentToolDispatcher)
+        dispatcher.shutdown_background(session, reason=reason)
+
+    def _before_terminal(self, session: Session) -> None:
+        try:
+            self.shutdown_background(
+                session,
+                reason=ProcessTerminationReason.SESSION_END,
+            )
+        except (SessionError, ToolExecutionError) as error:
+            raise OrchestrationError(
+                "background_shutdown_failed",
+                f"Could not stop background work ({error.code})",
+            ) from error

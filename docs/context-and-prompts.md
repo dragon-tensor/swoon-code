@@ -17,9 +17,10 @@ autonomous agent loop.
                                                         ▼
                                                 ValidatedMessage
 
-Each call performs exactly one exchange. It does not execute the returned actions, mutate
-session state, retry the chatbot, ask the user, or decide whether another turn should run.
-Those responsibilities belong to the future orchestration phase.
+Each channel call performs exactly one exchange. It does not execute the returned actions,
+mutate session state, retry the chatbot, ask the user, or decide whether another turn should
+run. Phase 9's `ReadOnlyOrchestrator` composes this deliberately inert boundary into a bounded
+loop; see `read-only-orchestration.md`.
 
 ## Context construction
 
@@ -128,10 +129,11 @@ have been omitted from the rendered context:
 
         validated = channel.exchange(
             context,
-            known_action_ids=session.state.result_history,
+            known_action_ids=session.state.used_action_ids,
         )
     finally:
         browser.close()
 
-The returned ValidatedMessage is inert. Passing its actions to the read-only dispatcher and
-deciding whether to continue are intentionally outside this phase.
+The returned ValidatedMessage remains inert. Callers that want automatic read dispatch and
+continuation can pass the channel to `ReadOnlyOrchestrator`; the channel itself retains its
+single-exchange contract.

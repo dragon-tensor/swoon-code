@@ -179,6 +179,7 @@ class SessionManagerTests(unittest.TestCase):
         self.assertEqual(record.tool, "list-dir")
         self.assertEqual(record.result.body, "three files")
         self.assertEqual(loaded.state.result_history, ("a1",))
+        self.assertEqual(loaded.state.used_action_ids, ("a1",))
 
         with self.assertRaises(SessionError) as raised:
             self.manager.record_action_result(session, "list-dir", result)
@@ -193,6 +194,7 @@ class SessionManagerTests(unittest.TestCase):
         )
         raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
         raw["version"] = 1
+        raw.pop("used_action_ids")
         for action in raw["action_ledger"]:
             action.pop("action_digest")
         session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
@@ -203,8 +205,63 @@ class SessionManagerTests(unittest.TestCase):
         self.manager.set_plan(loaded, "upgrade")
 
         upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["version"], 2)
+        self.assertEqual(upgraded["version"], 3)
         self.assertIn("action_digest", upgraded["action_ledger"][0])
+        self.assertEqual(upgraded["used_action_ids"], ["a1"])
+
+    def test_version_two_state_is_loaded_and_upgraded_on_update(self) -> None:
+        session = self.manager.create(session_id="sess_v2_upgrade")
+        self.manager.record_action_result(
+            session,
+            "list-dir",
+            Result("a1", ResultStatus.SUCCESS, body="legacy"),
+        )
+        raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        raw["version"] = 2
+        raw.pop("used_action_ids")
+        session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
+        session.paths.state_file.chmod(0o600)
+
+        loaded = self.manager.load(session.id)
+        self.assertEqual(loaded.state.used_action_ids, ("a1",))
+        self.manager.set_plan(loaded, "upgrade")
+
+        upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(upgraded["version"], 3)
+        self.assertEqual(upgraded["used_action_ids"], ["a1"])
+
+    def test_action_ids_can_be_reserved_before_a_failed_attempt(self) -> None:
+        session = self.manager.create(session_id="sess_reserved_actions")
+        self.manager.reserve_action_ids(session, ("attempt1", "attempt2"))
+
+        loaded = self.manager.load(session.id)
+        self.assertEqual(loaded.state.used_action_ids, ("attempt1", "attempt2"))
+        self.assertEqual(loaded.state.result_history, ())
+
+        with self.assertRaises(SessionError) as raised:
+            self.manager.reserve_action_ids(session, ("attempt1",))
+        self.assertEqual(raised.exception.code, "duplicate_action_id")
+
+    def test_step_limit_extension_requires_waiting_at_the_limit(self) -> None:
+        session = self.manager.create(max_steps=2, session_id="sess_extend")
+
+        with self.assertRaises(SessionError) as raised:
+            self.manager.extend_step_limit(session, 1)
+        self.assertEqual(raised.exception.code, "step_extension_not_allowed")
+
+        self.manager.advance_step(session)
+        self.manager.set_status(session, SessionStatus.WAITING_USER)
+        with self.assertRaises(SessionError) as raised:
+            self.manager.extend_step_limit(session, 1)
+        self.assertEqual(raised.exception.code, "step_extension_not_allowed")
+
+        self.manager.set_status(session, SessionStatus.ACTIVE)
+        self.manager.advance_step(session)
+        self.manager.set_status(session, SessionStatus.WAITING_USER)
+        self.manager.extend_step_limit(session, 3)
+
+        self.assertEqual(session.state.max_steps, 5)
+        self.assertEqual(session.state.status, SessionStatus.WAITING_USER)
 
     def test_oversized_result_is_not_persisted(self) -> None:
         manager = SessionManager(self.root / "small-state", max_result_bytes=4)

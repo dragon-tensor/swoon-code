@@ -20,6 +20,7 @@ Implemented foundations:
 6. Virtual-root path authorization
 7. Read-only tool execution
 8. Bounded AEML context, generated prompts, and validated single exchanges
+9. Bounded read-only orchestration, protocol repair, and human pauses
 
 The currently executable AEML tools are:
 
@@ -31,9 +32,10 @@ The currently executable AEML tools are:
 - `git-log`
 - `list-dependencies`
 
-Mutating tools and arbitrary command execution remain disabled. The browser transport can now
-perform one generated-and-validated AEML exchange at a time, but the autonomous orchestration
-loop is not implemented yet.
+Mutating tools and arbitrary command execution remain disabled. The Phase 9 library loop can
+now drive the seven read capabilities until completion, a human question, a step-limit pause,
+an explicit abort, or bounded protocol-repair exhaustion. The legacy browser-relay CLI remains
+a direct chatbot relay; orchestration is currently exposed as a Python API.
 
 ## Setup
 
@@ -99,12 +101,31 @@ To send one protocol turn through the browser transport:
         )
         validated = channel.exchange(
             context,
-            known_action_ids=session.state.result_history,
+            known_action_ids=session.state.used_action_ids,
         )
     finally:
         browser.close()
 
 This returns an inert ValidatedMessage; it does not execute tools or continue automatically.
+
+To let the interpreter own the validated read-only loop:
+
+    from swoon import ReadOnlyOrchestrator, SessionManager
+    from swoon.transport import AEMLChatChannel, ChatGPTWebTransport
+
+    sessions = SessionManager("/private/session/storage")
+    session = sessions.create("/path/to/reference/project")
+    browser = ChatGPTWebTransport("cookies.json")
+    browser.start()
+    try:
+        agent = ReadOnlyOrchestrator(sessions, AEMLChatChannel(browser))
+        outcome = agent.run(session, "Inspect this project and explain its entry points.")
+    finally:
+        browser.close()
+
+`outcome.reason` reports completion, a user pause, the step limit, abort, or protocol failure.
+If a step limit is reached, only a later human-side call with `additional_steps=N` can extend
+it. See the orchestration guide for pause/resume examples and exact failure semantics.
 
 ## Documentation
 
@@ -113,6 +134,7 @@ This returns an inert ValidatedMessage; it does not execute tools or continue au
 - `docs/path-policy.md` — virtual path policy
 - `docs/read-only-tools.md` — Phase 7 execution behavior
 - `docs/context-and-prompts.md` — Phase 8 context and transport bridge
+- `docs/read-only-orchestration.md` — Phase 9 autonomous read-only loop
 - `MIGRATION.md` — original relay history
 
 ## Tests

@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO, Callable, Iterator
+from typing import Any, BinaryIO, Callable, Iterable, Iterator
 
 from swoon.aeml.models import PathRef, Result, ResultStatus, Root
 
@@ -26,6 +26,7 @@ from .errors import (
     StepLimitReachedError,
 )
 from .models import (
+    ACTION_ID_PATTERN,
     ActionRecord,
     ChunkRecord,
     ImportLimits,
@@ -169,6 +170,67 @@ class SessionManager:
 
         return self._update(session, mutate)
 
+    def extend_step_limit(self, session: Session, additional_steps: int) -> Session:
+        """Extend an exhausted budget after an explicit human-side approval."""
+
+        if type(additional_steps) is not int or additional_steps < 1:
+            raise SessionError(
+                "invalid_step_extension",
+                "additional_steps must be a positive integer",
+            )
+
+        def mutate(state: SessionState) -> SessionState:
+            if state.status is not SessionStatus.WAITING_USER or state.step < state.max_steps:
+                raise SessionError(
+                    "step_extension_not_allowed",
+                    "Step limits may only be extended while waiting at an exhausted limit",
+                )
+            new_limit = state.max_steps + additional_steps
+            if new_limit > 10_000:
+                raise SessionError(
+                    "invalid_step_extension",
+                    "Extended max_steps cannot exceed 10000",
+                )
+            return replace(state, max_steps=new_limit)
+
+        return self._update(session, mutate)
+
+    def reserve_action_ids(self, session: Session, action_ids: Iterable[str]) -> Session:
+        """Persist action IDs before dispatch so failed attempts cannot be reused."""
+
+        if isinstance(action_ids, (str, bytes)):
+            raise SessionError("invalid_action_id", "action_ids must be an iterable of IDs")
+        try:
+            identifiers = tuple(action_ids)
+        except TypeError as error:
+            raise SessionError(
+                "invalid_action_id",
+                "action_ids must be an iterable of IDs",
+            ) from error
+        if not identifiers:
+            return session
+        for identifier in identifiers:
+            if not isinstance(identifier, str) or not ACTION_ID_PATTERN.fullmatch(identifier):
+                raise SessionError("invalid_action_id", "Invalid action ID")
+        if len(identifiers) != len(set(identifiers)):
+            raise SessionError("duplicate_action_id", "Action IDs contain a duplicate")
+
+        def mutate(state: SessionState) -> SessionState:
+            self._require_active(state)
+            already_used = set(state.used_action_ids).intersection(identifiers)
+            if already_used:
+                duplicate = sorted(already_used)[0]
+                raise SessionError(
+                    "duplicate_action_id",
+                    f"Action {duplicate!r} has already been used",
+                )
+            return replace(
+                state,
+                used_action_ids=state.used_action_ids + identifiers,
+            )
+
+        return self._update(session, mutate)
+
     def set_plan(self, session: Session, plan: str | None) -> Session:
         if plan is not None and not isinstance(plan, str):
             raise SessionError("invalid_plan", "Plan must be text or null")
@@ -222,6 +284,7 @@ class SessionManager:
         if (
             not isinstance(result, Result)
             or not result.action_id
+            or not ACTION_ID_PATTERN.fullmatch(result.action_id)
             or not isinstance(result.status, ResultStatus)
         ):
             raise SessionError("invalid_action_record", "A structured action result is required")
@@ -254,6 +317,11 @@ class SessionManager:
                 state,
                 action_ledger=state.action_ledger + (record,),
                 result_history=state.result_history + (result.action_id,),
+                used_action_ids=(
+                    state.used_action_ids
+                    if result.action_id in state.used_action_ids
+                    else state.used_action_ids + (result.action_id,)
+                ),
             )
 
         return self._update(session, mutate)

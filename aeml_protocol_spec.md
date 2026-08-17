@@ -1,5 +1,5 @@
 # AEML — Agent Execution Markup Language
-### Protocol spec v0.3 — for swoon code
+### Protocol spec v0.4 — for swoon code
 
 This is the contract between a hosted chatbot (no machine access, turn-based, message-size
 limited) and a local interpreter (full machine access, no reasoning) that lets the two together
@@ -39,8 +39,8 @@ understanding the other's intent.
     the interpreter can't predict it either — it only provides the *mechanism* (chunked writes,
     §7) for the LLM to use when it judges content is getting large. Guidance to self-chunk
     proactively belongs in swoon code's system prompt to the chatbot, not in enforceable code.
-11. **`<thought>` is never surfaced to the human**, in any mode. It's logged internally for
-    debugging swoon code itself, nothing more.
+11. **`<thought>` is never surfaced to the human**, in any mode. The read-only orchestrator
+    discards it and does not persist it in session state.
 
 ---
 
@@ -65,8 +65,8 @@ understanding the other's intent.
 
 | Tag | Purpose | Attrs | Body |
 |---|---|---|---|
-| `<plan>` | Optional upfront roadmap, shown to human, not executed | — | numbered steps |
-| `<thought>` | Private scratch reasoning. Logged, never executed, never surfaced (§0.11) | — | free text |
+| `<plan>` | Optional persisted roadmap, available for the host UI, not executed | — | numbered steps |
+| `<thought>` | Private scratch reasoning. Discarded, never executed or surfaced (§0.11) | — | free text |
 | `<action id="...">` | Wraps one tool invocation | `id` unique per session | see below |
 | &nbsp;&nbsp;`<tool>` | Which tool | — | name, must match §5 |
 | &nbsp;&nbsp;`<path root="output\|input">` | Path arg, relative to the given root | `root` optional, defaults to `output` | e.g. `app.py` |
@@ -138,6 +138,12 @@ are stamped with logical session paths only, never physical host paths.
 
 The transport bridge performs one numbered exchange per call. The autonomous orchestrator owns
 the repetition, action execution, retries, user pauses, and lifecycle transitions.
+
+In the read-only implementation, one new numbered AEML turn consumes one persisted session
+step. A malformed or invalid response retries that same turn and does not consume another step.
+Validated action IDs are durably reserved before dispatch, including IDs whose tool execution
+returns an error. Conversation turns are channel-local; a new channel attached to a persisted
+session starts at turn 1 while retaining the session's global step and action-ID history.
 
 ---
 
@@ -282,15 +288,15 @@ Rules:
 **Detecting an unintentional cutoff** (the LLM misjudged and got cut off mid-message, as
 opposed to writing genuinely malformed AEML): if a reply ends without a closing `</aeml>` tag,
 treat that as `likely_truncated_by_message_limit` rather than a generic `parse_error`. The
-interpreter responds:
+read-only interpreter responds on a repair attempt:
 
 ```
-<system_notice type="likely_truncated_by_message_limit" action_id="c1"/>
+<system_notice type="likely_truncated_by_message_limit" attempt="1" remaining="2"/>
 ```
 
-and expects the LLM's next reply to be a `<chunk seq="2">` continuation of the same action,
-rather than restarting the whole write from scratch or being asked to "reformat" (which is the
-generic-parse-error remedy and would be the wrong fix here).
+The incomplete envelope is never executed and no partial action ID is accepted. The LLM must
+return one complete replacement envelope for the same turn. Proactive `<chunk>` actions still
+split large writes across valid, complete protocol turns once write execution is enabled.
 
 ---
 
@@ -299,7 +305,7 @@ generic-parse-error remedy and would be the wrong fix here).
 | Edge case | Rule |
 |---|---|
 | Malformed/unparseable AEML, closing tag present | `<system_notice type="parse_error">`, up to 2 retries, then `<error code="malformed_output">` and end session. |
-| Reply ends with no closing `</aeml>` | Treated as `likely_truncated_by_message_limit` (§7), not `parse_error` — expects a chunk continuation, not a reformat. |
+| Reply ends with no closing `</aeml>` | Treated as `likely_truncated_by_message_limit` (§7), not `parse_error`; the incomplete envelope is not executed and the same turn is retried. |
 | Unknown `<tool>` name | `<error code="unknown_tool">`, valid list from §5, no execution. |
 | Path resolves outside the session's own root pair | `<error code="path_escape">`. Two occurrences in a session → hard stop. |
 | Write with `root="input"` | `<error code="input_readonly">` before execution, no exceptions. |
@@ -309,7 +315,7 @@ generic-parse-error remedy and would be the wrong fix here).
 | Tool output too large, LLM didn't scope it (no start_line/max_results/etc.) | `<truncated total_bytes="..." offset="0">` + preview; LLM pages with a follow-up scoped read. |
 | Binary file requested via `read-file` | `<error code="binary_unsupported">`. |
 | Multiple write actions in one reply | `<error code="batch_write_not_allowed">` — only read-only actions batch. |
-| Runaway session | Default `max_steps=40` (configurable). 80% → `step_limit_approaching` notice. 100% → forced `<ask_user>`. |
+| Runaway session | Default `max_steps=40` (configurable). 80% → `step_limit_approaching` notice. At 100%, the loop pauses for explicit human-side step approval. |
 | Tool execution failure | `<error code="tool_failed">` with stderr. Read ops: 1 silent retry. Write/execute ops: 0 automatic retries. |
 | `<ask_user>` mid-loop | Loop pauses fully; only a real human reply resumes it. |
 | Cross-session path reference | `<error code="path_escape">` — sessions are fully isolated. |
@@ -498,6 +504,17 @@ Resolved by the context and prompt implementation:
   validates assistant responses, so future-facing registry entries are not accidentally enabled.
 - A session-bound channel performs one transport exchange at a time and advances its turn only
   after the assistant response parses and validates.
+
+Resolved by the read-only orchestration implementation:
+
+- The loop owns step advancement, plan persistence, read dispatch, result/error feedback,
+  completion, abort, human questions, and step-limit pauses.
+- Parse, truncation, and validation failures retry the same protocol turn up to the configured
+  repair bound; exhaustion aborts with `malformed_output`.
+- Every validated action ID is persisted before execution, so failed IDs cannot be reused after
+  a later turn or process restart.
+- Step-limit extension requires an explicit human-facing API argument while waiting at the
+  exhausted limit; AEML cannot extend its own budget.
 
 Remaining open items:
 

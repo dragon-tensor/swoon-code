@@ -13,7 +13,8 @@ canonical schema and a seven-tool allowlist. Mutating/executing schemas fail wit
 Successful results are atomically stored in the session action ledger with a SHA-256 digest of
 the normalized action. Reusing an action ID for the exact same action returns its stored result
 without reading again; changing any argument under that ID is rejected. Protocol errors are not
-persisted.
+stored as results. When the Phase 9 orchestrator is used, it reserves every validated action ID
+before dispatch, so an ID whose tool attempt fails is still durably unavailable for reuse.
 Read failures marked as transient receive one silent retry.
 
 Unfinished output chunks block reads that depend on those paths.

@@ -14,8 +14,8 @@ from swoon.aeml.models import PathRef, Result, ResultStatus, Root, Truncation
 from .errors import SessionError
 
 
-STATE_VERSION = 2
-SUPPORTED_STATE_VERSIONS = frozenset({1, STATE_VERSION})
+STATE_VERSION = 3
+SUPPORTED_STATE_VERSIONS = frozenset({1, 2, STATE_VERSION})
 SESSION_ID_PATTERN = re.compile(r"sess_[A-Za-z0-9_-]{1,64}\Z")
 ACTION_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 TOOL_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
@@ -88,6 +88,7 @@ class SessionState:
     result_history: tuple[str, ...] = ()
     chunks: tuple[ChunkRecord, ...] = ()
     processes: tuple[ProcessRecord, ...] = ()
+    used_action_ids: tuple[str, ...] = ()
 
     @property
     def step_limit_approaching(self) -> bool:
@@ -124,6 +125,7 @@ class SessionState:
             "plan": self.plan,
             "action_ledger": [_action_to_dict(item) for item in self.action_ledger],
             "result_history": list(self.result_history),
+            "used_action_ids": list(self.used_action_ids),
             "chunks": [_chunk_to_dict(item) for item in self.chunks],
             "processes": [_process_to_dict(item) for item in self.processes],
         }
@@ -132,6 +134,12 @@ class SessionState:
     def from_dict(cls, raw: Any) -> SessionState:
         if not isinstance(raw, dict):
             raise SessionError("invalid_session_state", "Session state must be a JSON object")
+        version = raw.get("version")
+        if type(version) is not int or version not in SUPPORTED_STATE_VERSIONS:
+            raise SessionError(
+                "unsupported_session_version",
+                f"Unsupported session state version {version!r}",
+            )
         expected_keys = {
             "version",
             "session_id",
@@ -147,6 +155,8 @@ class SessionState:
             "chunks",
             "processes",
         }
+        if version >= 3:
+            expected_keys.add("used_action_ids")
         if set(raw) != expected_keys:
             missing = sorted(expected_keys - set(raw))
             unknown = sorted(set(raw) - expected_keys)
@@ -154,13 +164,6 @@ class SessionState:
                 "invalid_session_state",
                 f"Session state keys differ (missing={missing}, unknown={unknown})",
             )
-        version = raw["version"]
-        if type(version) is not int or version not in SUPPORTED_STATE_VERSIONS:
-            raise SessionError(
-                "unsupported_session_version",
-                f"Unsupported session state version {raw['version']!r}",
-            )
-
         session_id = _required_string(raw, "session_id")
         validate_session_id(session_id)
         revision = _nonnegative_integer(raw, "revision")
@@ -193,6 +196,24 @@ class SessionState:
         if not set(history_values).issubset(action_ids):
             raise SessionError("invalid_session_state", "Result history references an unknown action")
 
+        used_values = (
+            _required_list(raw, "used_action_ids")
+            if version >= 3
+            else list(history_values)
+        )
+        if not all(
+            isinstance(item, str) and ACTION_ID_PATTERN.fullmatch(item)
+            for item in used_values
+        ):
+            raise SessionError("invalid_session_state", "Used action IDs are invalid")
+        if len(used_values) != len(set(used_values)):
+            raise SessionError("invalid_session_state", "Used action IDs contain duplicates")
+        if not set(action_ids).issubset(used_values):
+            raise SessionError(
+                "invalid_session_state",
+                "Action ledger references an unreserved action ID",
+            )
+
         chunks = tuple(_chunk_from_dict(item) for item in _required_list(raw, "chunks"))
         chunk_keys = [(item.path.root, item.path.value) for item in chunks]
         if len(chunk_keys) != len(set(chunk_keys)):
@@ -219,6 +240,7 @@ class SessionState:
             plan=plan,
             action_ledger=actions,
             result_history=tuple(history_values),
+            used_action_ids=tuple(used_values),
             chunks=chunks,
             processes=processes,
         )

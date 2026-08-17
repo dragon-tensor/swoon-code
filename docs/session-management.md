@@ -47,6 +47,7 @@ owner could otherwise change permission bits.
 - Persisted plan
 - Completed action/result ledger with normalized action digests for idempotency
 - Ordered result history
+- Every action ID accepted for dispatch, including attempts that returned an error
 - Chunk sequence state
 - Background-process handles and output offsets
 
@@ -57,17 +58,26 @@ The state loader validates the complete JSON schema and rejects mismatched IDs, 
 duplicate records, impossible timestamps, input-root chunks, broad state-file permissions, or a
 writable/tampered input tree.
 
+The current state schema is version 3. Versions 1 and 2 remain readable and are upgraded on the
+next state update; their completed-result history seeds the new durable used-action-ID set.
+
 ## Lifecycle operations
 
 `SessionManager` currently provides:
 
 - `advance_step`
+- `extend_step_limit`
 - `set_plan`
 - `set_status`
+- `reserve_action_ids`
 - `record_action_result`
 - `record_chunk`
 - `register_process`
 - `update_process`
 
-None of these methods execute an AEML action or resolve an LLM-provided filesystem path. Those
-capabilities remain separated until the path-policy and tool-execution phases.
+`reserve_action_ids` is called before dispatch, so an attempted action ID cannot be reused after
+a tool failure or process restart. `extend_step_limit` succeeds only while the session is
+waiting at an exhausted limit; this keeps budget approval on the human-facing API side.
+
+None of these methods execute an AEML action or resolve an LLM-provided filesystem path. Policy,
+tool execution, and orchestration remain separate boundaries.

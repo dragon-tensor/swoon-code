@@ -1,5 +1,9 @@
 # Migration Guide — ChatGPT CLI
 
+> Historical snapshot: this document describes the original relay before the package, AEML
+> interpreter, and agent CLI were added. See `README.md` and `docs/agent-cli.md` for the current
+> implementation.
+
 ## Project overview
 
 A command-line chatbot that relays messages to ChatGPT via a headless Playwright browser. Uses your own session cookies — no API key, no OpenAI billing.

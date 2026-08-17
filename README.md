@@ -21,6 +21,7 @@ Implemented foundations:
 7. Read-only tool execution
 8. Bounded AEML context, generated prompts, and validated single exchanges
 9. Bounded read-only orchestration, protocol repair, and human pauses
+10. Agent CLI with session create/resume and interactive lifecycle handling
 
 The currently executable AEML tools are:
 
@@ -32,10 +33,10 @@ The currently executable AEML tools are:
 - `git-log`
 - `list-dependencies`
 
-Mutating tools and arbitrary command execution remain disabled. The Phase 9 library loop can
-now drive the seven read capabilities until completion, a human question, a step-limit pause,
-an explicit abort, or bounded protocol-repair exhaustion. The legacy browser-relay CLI remains
-a direct chatbot relay; orchestration is currently exposed as a Python API.
+Mutating tools and arbitrary command execution remain disabled. The `swoon agent` command can
+drive the seven read capabilities until completion, a human question, a step-limit pause, an
+explicit abort, or bounded protocol-repair exhaustion. The separate `swoon chat` command and
+legacy `chatgpt.sh` wrapper remain direct chatbot relays.
 
 ## Setup
 
@@ -48,9 +49,49 @@ python3 -m venv .venv
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
 Cookie-Editor list and a Playwright storage-state object are accepted.
 
+## Read-only agent CLI
+
+Create a session by importing an existing project as read-only input:
+
+```bash
+.venv/bin/swoon agent \
+  --cookies cookies.json \
+  --project /path/to/project \
+  --prompt "Inspect this project and explain its entry points."
+```
+
+The command prints the session ID before starting the browser. If the agent asks a question or
+reaches its step limit, the default interactive mode reads the human answer or additional-step
+approval from the terminal. Resume a saved session with the same session storage directory:
+
+```bash
+.venv/bin/swoon agent \
+  --cookies cookies.json \
+  --resume sess_EXAMPLE \
+  --prompt "Continue the inspection."
+```
+
+For scripted use, `--non-interactive` returns exit code 6 when human input is required. An
+exhausted session can be resumed with explicit approval:
+
+```bash
+.venv/bin/swoon agent \
+  --cookies cookies.json \
+  --resume sess_EXAMPLE \
+  --additional-steps 5 \
+  --prompt "Continue." \
+  --non-interactive
+```
+
+This phase can inspect only. It cannot copy a project into the output root, modify files, run
+tests, install packages, or execute arbitrary commands.
+
 ## Browser relay
 
 ```bash
+# Explicit relay command
+.venv/bin/swoon chat --cookies cookies.json -i
+
 # Interactive relay
 ./chatgpt.sh --cookies cookies.json -i
 
@@ -135,6 +176,7 @@ it. See the orchestration guide for pause/resume examples and exact failure sema
 - `docs/read-only-tools.md` — Phase 7 execution behavior
 - `docs/context-and-prompts.md` — Phase 8 context and transport bridge
 - `docs/read-only-orchestration.md` — Phase 9 autonomous read-only loop
+- `docs/agent-cli.md` — Phase 10 command-line lifecycle and exit codes
 - `MIGRATION.md` — original relay history
 
 ## Tests

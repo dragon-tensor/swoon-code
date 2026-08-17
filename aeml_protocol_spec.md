@@ -516,6 +516,14 @@ Resolved by the read-only orchestration implementation:
 - Step-limit extension requires an explicit human-facing API argument while waiting at the
   exhausted limit; AEML cannot extend its own budget.
 
+Resolved by the agent CLI implementation:
+
+- `swoon agent` creates or resumes persistent sessions and drives every orchestration outcome.
+- Real terminal answers resume `<ask_user>` pauses; `/abort` persists a human abort.
+- Step extensions require an interactive numeric approval or the resume-only
+  `--additional-steps` option. Non-interactive pauses return a distinct resumable exit code.
+- `swoon chat` and the legacy entrypoints remain unstructured relays and never execute AEML.
+
 Remaining open items:
 
 - Whether background processes (`run-command-background`) need a heartbeat tag so the

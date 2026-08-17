@@ -115,3 +115,6 @@ steps through AEML or user-prompt text.
 
 This phase is intentionally read-only. File mutation, command execution, package installation,
 tests, builds, and Git writes require later policy and sandbox phases.
+
+Phase 10 exposes this API through `swoon agent`, including session creation/resume, terminal
+answers, explicit step approval, and deterministic exit codes. See `agent-cli.md`.

@@ -23,6 +23,8 @@ DEFAULT_PROTECTED_DIRECTORIES = frozenset(
     }
 )
 DEFAULT_FILENAME_PATTERNS = (
+    ".swoon-tmp-*",
+    ".swoon-stage-*",
     ".env",
     ".env.*",
     ".netrc",

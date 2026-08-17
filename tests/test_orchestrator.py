@@ -8,12 +8,14 @@ from pathlib import Path
 from swoon.aeml import AEMLPromptBuilder
 from swoon.aeml.tool_registry import TOOL_SPECS
 from swoon.orchestration import (
+    AgentOrchestrator,
     OrchestrationError,
     ReadOnlyOrchestrator,
     RunStopReason,
 )
 from swoon.session import SessionManager, SessionStatus
 from swoon.transport import AEMLChatChannel
+from swoon.tools import AgentToolDispatcher
 
 
 class FakeTextTransport:
@@ -393,6 +395,191 @@ class ReadOnlyOrchestratorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unsafe tools: create-file"):
             ReadOnlyOrchestrator(self.manager, channel)
+
+
+class AgentOrchestratorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.manager = SessionManager(self.root / "sessions")
+
+    def tearDown(self) -> None:
+        ReadOnlyOrchestratorTests._make_writable(self.root)
+        self.temporary.cleanup()
+
+    def agent(self, transport: FakeTextTransport) -> AgentOrchestrator:
+        dispatcher = AgentToolDispatcher(self.manager)
+        channel = AEMLChatChannel(
+            transport,
+            prompt_builder=AEMLPromptBuilder(dispatcher.tool_specs),
+        )
+        return AgentOrchestrator(self.manager, channel, dispatcher=dispatcher)
+
+    def test_agent_executes_output_create_then_completes(self) -> None:
+        session = self.manager.create(session_id="sess_agent_create")
+        transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_create">'
+                    '<action id="create1"><tool>create-file</tool><path>app.py</path>'
+                    "<args><content>print('hello')\n</content></args></action>"
+                    "<next>await_result</next></aeml>"
+                ),
+                (
+                    '<aeml turn="2" session="sess_agent_create">'
+                    "<complete>Created app.py.</complete></aeml>"
+                ),
+            ]
+        )
+
+        outcome = self.agent(transport).run(session, "Create an app")
+
+        self.assertEqual(outcome.reason, RunStopReason.COMPLETED)
+        self.assertEqual(
+            (session.paths.host_output / "app.py").read_text(encoding="utf-8"),
+            "print('hello')\n",
+        )
+        self.assertIn('name="create-file"', transport.prompts[0])
+        self.assertIn('<result id="create1">', transport.prompts[1])
+
+    def test_overwrite_confirmation_survives_new_orchestrator_and_channel(self) -> None:
+        session = self.manager.create(session_id="sess_agent_confirm")
+        target = session.paths.host_output / "app.py"
+        target.write_text("old\n", encoding="utf-8")
+        first_transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_confirm">'
+                    '<action id="overwrite1"><tool>overwrite-file</tool><path>app.py</path>'
+                    "<args><content>new\n</content></args>"
+                    "<expect_confirm>true</expect_confirm></action>"
+                    "<next>await_result</next></aeml>"
+                )
+            ]
+        )
+
+        paused = self.agent(first_transport).run(session, "Replace app.py")
+
+        self.assertEqual(paused.reason, RunStopReason.AWAITING_CONFIRMATION)
+        self.assertEqual(target.read_text(encoding="utf-8"), "old\n")
+        persisted = self.manager.load(session.id)
+        self.assertEqual(persisted.state.status, SessionStatus.WAITING_USER)
+        self.assertEqual(persisted.state.pending_confirmation.action.id, "overwrite1")
+
+        second_transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_confirm">'
+                    "<complete>Replacement approved and complete.</complete></aeml>"
+                )
+            ]
+        )
+        completed = self.agent(second_transport).run(
+            persisted,
+            None,
+            confirmation=True,
+        )
+
+        self.assertEqual(completed.reason, RunStopReason.COMPLETED)
+        self.assertEqual(target.read_text(encoding="utf-8"), "new\n")
+        self.assertIn('<result id="overwrite1">', second_transport.prompts[0])
+        final = self.manager.load(session.id)
+        self.assertIsNone(final.state.pending_confirmation)
+        self.assertEqual(final.state.result_history, ("overwrite1",))
+
+    def test_denied_overwrite_is_persisted_as_failure_and_never_runs(self) -> None:
+        session = self.manager.create(session_id="sess_agent_deny")
+        target = session.paths.host_output / "app.py"
+        target.write_text("old", encoding="utf-8")
+        first = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_deny">'
+                    '<action id="overwrite1"><tool>overwrite-file</tool><path>app.py</path>'
+                    "<args><content>new</content></args>"
+                    "<expect_confirm>true</expect_confirm></action>"
+                    "<next>await_result</next></aeml>"
+                )
+            ]
+        )
+        paused = self.agent(first).run(session, "Replace app.py")
+        second = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_deny">'
+                    "<complete>Kept the original.</complete></aeml>"
+                )
+            ]
+        )
+
+        completed = self.agent(second).run(paused.session, None, confirmation=False)
+
+        self.assertEqual(completed.reason, RunStopReason.COMPLETED)
+        self.assertEqual(target.read_text(encoding="utf-8"), "old")
+        self.assertIn("<status>failure</status>", second.prompts[0])
+        record = self.manager.load(session.id).state.action("overwrite1")
+        self.assertEqual(record.result.status.value, "failure")
+
+    def test_approval_fails_closed_when_target_changed_during_pause(self) -> None:
+        session = self.manager.create(session_id="sess_agent_stale_confirmation")
+        target = session.paths.host_output / "app.py"
+        target.write_text("old", encoding="utf-8")
+        first = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_stale_confirmation">'
+                    '<action id="overwrite1"><tool>overwrite-file</tool><path>app.py</path>'
+                    "<args><content>requested</content></args>"
+                    "<expect_confirm>true</expect_confirm></action>"
+                    "<next>await_result</next></aeml>"
+                )
+            ]
+        )
+        paused = self.agent(first).run(session, "Replace app.py")
+        target.write_text("changed while waiting", encoding="utf-8")
+        second = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_stale_confirmation">'
+                    "<complete>Detected the stale approval.</complete></aeml>"
+                )
+            ]
+        )
+
+        completed = self.agent(second).run(paused.session, None, confirmation=True)
+
+        self.assertEqual(completed.reason, RunStopReason.COMPLETED)
+        self.assertEqual(target.read_text(encoding="utf-8"), "changed while waiting")
+        self.assertIn('code="confirmation_stale"', second.prompts[0])
+        final = self.manager.load(session.id)
+        self.assertIsNone(final.state.pending_confirmation)
+        self.assertIsNone(final.state.action("overwrite1"))
+
+    def test_undeclared_overwrite_returns_error_without_pausing_or_mutating(self) -> None:
+        session = self.manager.create(session_id="sess_agent_no_declaration")
+        target = session.paths.host_output / "app.py"
+        target.write_text("old", encoding="utf-8")
+        transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_no_declaration">'
+                    '<action id="overwrite1"><tool>overwrite-file</tool><path>app.py</path>'
+                    "<args><content>new</content></args></action>"
+                    "<next>await_result</next></aeml>"
+                ),
+                (
+                    '<aeml turn="2" session="sess_agent_no_declaration">'
+                    "<complete>Did not overwrite.</complete></aeml>"
+                ),
+            ]
+        )
+
+        outcome = self.agent(transport).run(session, "Replace app.py")
+
+        self.assertEqual(outcome.reason, RunStopReason.COMPLETED)
+        self.assertEqual(target.read_text(encoding="utf-8"), "old")
+        self.assertIn('code="confirmation_required"', transport.prompts[1])
+        self.assertIsNone(self.manager.load(session.id).state.pending_confirmation)
 
 
 if __name__ == "__main__":

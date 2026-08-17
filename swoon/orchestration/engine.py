@@ -1,4 +1,4 @@
-"""Bounded read-only AEML orchestration over a session-bound chat channel."""
+"""Bounded AEML orchestration over a session-bound chat channel."""
 
 from __future__ import annotations
 
@@ -12,26 +12,33 @@ from swoon.aeml import (
     AEMLParseError,
     AEMLTruncatedError,
     AEMLValidationError,
+    AEMLValidator,
 )
 from swoon.aeml.models import (
+    AEMLMessage,
     NextDirective,
     ProtocolError,
     Result,
+    ResultStatus,
     SystemNotice,
     ToolEffect,
     ValidatedMessage,
 )
 from swoon.session import Session, SessionManager, SessionStatus
 from swoon.session.models import ACTION_ID_PATTERN
-from swoon.tools import IMPLEMENTED_READ_TOOLS, ReadOnlyToolDispatcher
+from swoon.tools import (
+    AgentToolDispatcher,
+    ConfirmationRequest,
+    ReadOnlyToolDispatcher,
+)
 from swoon.transport import AEMLChatChannel
 
 from .errors import OrchestrationError
 from .models import OrchestrationLimits, RunResult, RunStopReason
 
 
-class ReadOnlyOrchestrator:
-    """Advance validated AEML turns and dispatch only the seven read capabilities.
+class AEMLOrchestrator:
+    """Advance validated AEML turns through one explicitly allowlisted dispatcher.
 
     One session step is consumed for each new AEML turn. Repair attempts reuse that turn
     and are bounded independently by :class:`OrchestrationLimits`.
@@ -66,14 +73,14 @@ class ReadOnlyOrchestrator:
             raise TypeError("message_sink must be callable or null")
 
         tool_specs = channel.prompt_builder.tool_specs
-        unsupported = set(tool_specs) - IMPLEMENTED_READ_TOOLS
-        non_read = {
+        unsupported = set(tool_specs) - selected_dispatcher.implemented_tools
+        disallowed_effects = {
             name
             for name, spec in tool_specs.items()
-            if spec.effect is not ToolEffect.READ_ONLY
+            if spec.effect not in selected_dispatcher.allowed_effects
         }
-        if unsupported or non_read:
-            names = ", ".join(sorted(unsupported | non_read))
+        if unsupported or disallowed_effects:
+            names = ", ".join(sorted(unsupported | disallowed_effects))
             raise ValueError(f"Orchestration channel enables unsafe tools: {names}")
 
         self.session_manager = session_manager
@@ -90,6 +97,7 @@ class ReadOnlyOrchestrator:
         user_prompt: str | None,
         *,
         additional_steps: int | None = None,
+        confirmation: bool | None = None,
     ) -> RunResult:
         """Run until completion, a human pause, a hard stop, or retry exhaustion."""
 
@@ -99,7 +107,12 @@ class ReadOnlyOrchestrator:
                 "Only one orchestration run may execute at a time",
             )
         try:
-            return self._run(session, user_prompt, additional_steps=additional_steps)
+            return self._run(
+                session,
+                user_prompt,
+                additional_steps=additional_steps,
+                confirmation=confirmation,
+            )
         finally:
             self._run_lock.release()
 
@@ -109,6 +122,7 @@ class ReadOnlyOrchestrator:
         user_prompt: str | None,
         *,
         additional_steps: int | None,
+        confirmation: bool | None,
     ) -> RunResult:
         session = self._load_managed_session(supplied_session)
         if session.state.status in {SessionStatus.COMPLETED, SessionStatus.ABORTED}:
@@ -122,38 +136,89 @@ class ReadOnlyOrchestrator:
                 f"Channel is bound to session {self.channel.session_id!r}",
             )
 
-        if (
-            session.state.status is SessionStatus.ACTIVE
-            and session.state.step >= session.state.max_steps
-        ):
-            self.session_manager.set_status(session, SessionStatus.WAITING_USER)
-
-        if session.state.status is SessionStatus.WAITING_USER:
-            if session.state.step >= session.state.max_steps:
-                if additional_steps is None:
-                    return self._step_limit_result(session)
-                self._require_user_prompt(user_prompt)
-                self.session_manager.extend_step_limit(session, additional_steps)
-            elif additional_steps is not None:
-                raise OrchestrationError(
-                    "unexpected_step_extension",
-                    "A non-exhausted user pause cannot extend the step budget",
-                )
-            else:
-                self._require_user_prompt(user_prompt)
-            self.session_manager.set_status(session, SessionStatus.ACTIVE)
-        else:
-            if additional_steps is not None:
-                raise OrchestrationError(
-                    "unexpected_step_extension",
-                    "An active session cannot extend its own step budget",
-                )
-            self._require_user_prompt(user_prompt)
-
         updates: list[str] = []
         pending_errors: tuple[ProtocolError, ...] = ()
         pending_notices: tuple[SystemNotice, ...] = ()
         next_user_prompt = user_prompt
+
+        if session.state.pending_confirmation is not None:
+            if additional_steps is not None:
+                raise OrchestrationError(
+                    "confirmation_pending",
+                    "Resolve the pending action before extending the step budget",
+                )
+            if confirmation is None:
+                return self._confirmation_result(session)
+            if type(confirmation) is not bool:
+                raise OrchestrationError(
+                    "invalid_confirmation",
+                    "confirmation must be boolean or null",
+                )
+            action = self._validated_pending_action(session)
+            pending = session.state.pending_confirmation
+            assert pending is not None
+            if confirmation:
+                response = self.dispatcher.execute(action, session, confirmed=True)
+                if isinstance(response, ProtocolError):
+                    self.session_manager.clear_pending_confirmation(session)
+                    pending_errors = (response,)
+                elif not isinstance(response, Result):
+                    raise OrchestrationError(
+                        "invalid_tool_response",
+                        "Dispatcher returned an unsupported confirmation response",
+                    )
+                next_user_prompt = user_prompt or (
+                    f"The human approved pending action {action.source.id!r}. Continue."
+                )
+            else:
+                denial = Result(
+                    action.source.id,
+                    ResultStatus.FAILURE,
+                    body="Human denied this destructive action; no tool operation ran.",
+                )
+                self.session_manager.record_action_result(
+                    session,
+                    action.spec.name,
+                    denial,
+                    action_digest=self.dispatcher.action_digest(action),
+                    resolve_confirmation=True,
+                )
+                next_user_prompt = user_prompt or (
+                    f"The human denied pending action {action.source.id!r}. Continue safely."
+                )
+        else:
+            if confirmation is not None:
+                raise OrchestrationError(
+                    "unexpected_confirmation",
+                    "The session has no action awaiting confirmation",
+                )
+            if (
+                session.state.status is SessionStatus.ACTIVE
+                and session.state.step >= session.state.max_steps
+            ):
+                self.session_manager.set_status(session, SessionStatus.WAITING_USER)
+
+            if session.state.status is SessionStatus.WAITING_USER:
+                if session.state.step >= session.state.max_steps:
+                    if additional_steps is None:
+                        return self._step_limit_result(session)
+                    self._require_user_prompt(user_prompt)
+                    self.session_manager.extend_step_limit(session, additional_steps)
+                elif additional_steps is not None:
+                    raise OrchestrationError(
+                        "unexpected_step_extension",
+                        "A non-exhausted user pause cannot extend the step budget",
+                    )
+                else:
+                    self._require_user_prompt(user_prompt)
+                self.session_manager.set_status(session, SessionStatus.ACTIVE)
+            else:
+                if additional_steps is not None:
+                    raise OrchestrationError(
+                        "unexpected_step_extension",
+                        "An active session cannot extend its own step budget",
+                    )
+                self._require_user_prompt(user_prompt)
 
         while True:
             if session.state.step >= session.state.max_steps:
@@ -233,7 +298,33 @@ class ReadOnlyOrchestrator:
             if message.actions:
                 action_ids = tuple(action.source.id for action in message.actions)
                 self.session_manager.reserve_action_ids(session, action_ids)
-                responses = self.dispatcher.execute_message(message, session)
+                responses: list[Result | ProtocolError] = []
+                for action in message.actions:
+                    confirmation_request = self.dispatcher.confirmation_request(
+                        action,
+                        session,
+                    )
+                    if isinstance(confirmation_request, ConfirmationRequest):
+                        if len(message.actions) != 1:
+                            raise OrchestrationError(
+                                "invalid_control_flow",
+                                "A confirmation-requiring action must be the only action",
+                            )
+                        self.session_manager.request_confirmation(
+                            session,
+                            action.source,
+                            confirmation_request.reason,
+                            confirmation_request.guard,
+                        )
+                        self._publish_updates(source.say)
+                        return self._confirmation_result(
+                            session,
+                            updates=updates,
+                        )
+                    if isinstance(confirmation_request, ProtocolError):
+                        responses.append(confirmation_request)
+                    else:
+                        responses.append(self.dispatcher.execute(action, session))
                 pending_errors = tuple(
                     response
                     for response in responses
@@ -242,7 +333,7 @@ class ReadOnlyOrchestrator:
                 if not all(isinstance(response, (Result, ProtocolError)) for response in responses):
                     raise OrchestrationError(
                         "invalid_tool_response",
-                        "Read-only dispatcher returned an unsupported response",
+                        "Dispatcher returned an unsupported response",
                     )
             else:
                 pending_errors = ()
@@ -328,6 +419,70 @@ class ReadOnlyOrchestrator:
             return action_id
         return None
 
+    def _validated_pending_action(self, session: Session):
+        pending = session.state.pending_confirmation
+        if pending is None:
+            raise OrchestrationError(
+                "confirmation_not_pending",
+                "The session has no pending confirmation",
+            )
+        if pending.action.tool not in self.channel.prompt_builder.tool_specs:
+            raise OrchestrationError(
+                "confirmation_tool_unavailable",
+                "The current channel does not enable the pending action's tool",
+            )
+        known_ids = set(session.state.used_action_ids)
+        known_ids.discard(pending.action.id)
+        message = AEMLMessage(
+            turn=1,
+            session=session.id,
+            actions=(pending.action,),
+            next=NextDirective.AWAIT_RESULT,
+        )
+        try:
+            validated = AEMLValidator(self.dispatcher.tool_specs).validate(
+                message,
+                expected_turn=1,
+                expected_session=session.id,
+                known_action_ids=known_ids,
+            )
+        except AEMLValidationError as error:
+            raise OrchestrationError(
+                "invalid_pending_confirmation",
+                f"Persisted pending action is no longer valid: {error}",
+            ) from error
+        if len(validated.actions) != 1:
+            raise OrchestrationError(
+                "invalid_pending_confirmation",
+                "Persisted confirmation does not contain exactly one action",
+            )
+        return validated.actions[0]
+
+    def _confirmation_result(
+        self,
+        session: Session,
+        *,
+        updates: list[str] | None = None,
+    ) -> RunResult:
+        pending = session.state.pending_confirmation
+        if pending is None:
+            raise OrchestrationError(
+                "confirmation_not_pending",
+                "The session has no pending confirmation",
+            )
+        question = (
+            f"Approve action {pending.action.id!r} ({pending.action.tool})? "
+            f"{pending.reason}. Denial leaves the target unchanged."
+        )
+        self._publish_updates(question)
+        return RunResult(
+            session=session,
+            reason=RunStopReason.AWAITING_CONFIRMATION,
+            updates=tuple(updates or ()),
+            question=question,
+            last_turn=self.channel.last_turn,
+        )
+
     def _step_limit_result(
         self,
         session: Session,
@@ -379,3 +534,55 @@ class ReadOnlyOrchestrator:
                     "message_sink_failed",
                     f"Human message sink failed ({error.__class__.__name__})",
                 ) from error
+
+
+class ReadOnlyOrchestrator(AEMLOrchestrator):
+    """Compatibility facade that permits only the seven read capabilities."""
+
+    def __init__(
+        self,
+        session_manager: SessionManager,
+        channel: AEMLChatChannel,
+        *,
+        dispatcher: ReadOnlyToolDispatcher | None = None,
+        context_builder: AEMLContextBuilder | None = None,
+        limits: OrchestrationLimits | None = None,
+        message_sink: Callable[[str], None] | None = None,
+    ) -> None:
+        selected = dispatcher or ReadOnlyToolDispatcher(session_manager)
+        if isinstance(selected, AgentToolDispatcher):
+            raise TypeError("dispatcher must be a read-only dispatcher")
+        super().__init__(
+            session_manager,
+            channel,
+            dispatcher=selected,
+            context_builder=context_builder,
+            limits=limits,
+            message_sink=message_sink,
+        )
+
+
+class AgentOrchestrator(AEMLOrchestrator):
+    """Bounded agent loop with reads and output-only filesystem mutation."""
+
+    def __init__(
+        self,
+        session_manager: SessionManager,
+        channel: AEMLChatChannel,
+        *,
+        dispatcher: AgentToolDispatcher | None = None,
+        context_builder: AEMLContextBuilder | None = None,
+        limits: OrchestrationLimits | None = None,
+        message_sink: Callable[[str], None] | None = None,
+    ) -> None:
+        selected = dispatcher or AgentToolDispatcher(session_manager)
+        if not isinstance(selected, AgentToolDispatcher):
+            raise TypeError("dispatcher must be an AgentToolDispatcher")
+        super().__init__(
+            session_manager,
+            channel,
+            dispatcher=selected,
+            context_builder=context_builder,
+            limits=limits,
+            message_sink=message_sink,
+        )

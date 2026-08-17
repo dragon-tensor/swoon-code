@@ -40,9 +40,9 @@ A `ResolvedPath` records device/inode/type fingerprints for the root and every e
 component. A tool must call `policy.revalidate(resolved)` immediately before use. Replacement,
 newly created targets, deleted parents, or inserted links become `path_changed` failures.
 
-This closes the policy-time gap but does not replace safe filesystem syscalls. Future tool
-executors must still use no-follow/open-at primitives where available and must not pass raw LLM
-paths directly to standard file or shell operations.
+This closes the policy-time gap but does not replace safe filesystem syscalls. The Phase 7 read
+tools and Phase 11 mutations additionally use descriptor-relative no-follow primitives and
+verify opened entries. Raw LLM paths are never passed directly to file or shell operations.
 
-The path policy only authorizes. It does not open, read, create, edit, delete, or execute
-anything.
+The path policy itself only authorizes. Separate tool layers perform reads and the six enabled
+output mutations; delete and execution remain disabled.

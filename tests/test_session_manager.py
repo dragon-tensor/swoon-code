@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from swoon.aeml.models import PathRef, Result, ResultStatus, Root
+from swoon.aeml.models import Action, Argument, PathRef, Result, ResultStatus, Root
 from swoon.session import (
     ImportLimits,
     ProcessStatus,
@@ -195,6 +195,7 @@ class SessionManagerTests(unittest.TestCase):
         raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
         raw["version"] = 1
         raw.pop("used_action_ids")
+        raw.pop("pending_confirmation")
         for action in raw["action_ledger"]:
             action.pop("action_digest")
         session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
@@ -205,7 +206,7 @@ class SessionManagerTests(unittest.TestCase):
         self.manager.set_plan(loaded, "upgrade")
 
         upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["version"], 3)
+        self.assertEqual(upgraded["version"], 4)
         self.assertIn("action_digest", upgraded["action_ledger"][0])
         self.assertEqual(upgraded["used_action_ids"], ["a1"])
 
@@ -219,6 +220,7 @@ class SessionManagerTests(unittest.TestCase):
         raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
         raw["version"] = 2
         raw.pop("used_action_ids")
+        raw.pop("pending_confirmation")
         session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
         session.paths.state_file.chmod(0o600)
 
@@ -227,8 +229,24 @@ class SessionManagerTests(unittest.TestCase):
         self.manager.set_plan(loaded, "upgrade")
 
         upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(upgraded["version"], 3)
+        self.assertEqual(upgraded["version"], 4)
         self.assertEqual(upgraded["used_action_ids"], ["a1"])
+
+    def test_version_three_state_is_loaded_and_upgraded_on_update(self) -> None:
+        session = self.manager.create(session_id="sess_v3_upgrade")
+        raw = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        raw["version"] = 3
+        raw.pop("pending_confirmation")
+        session.paths.state_file.write_text(json.dumps(raw), encoding="utf-8")
+        session.paths.state_file.chmod(0o600)
+
+        loaded = self.manager.load(session.id)
+        self.assertIsNone(loaded.state.pending_confirmation)
+        self.manager.set_plan(loaded, "upgrade")
+
+        upgraded = json.loads(session.paths.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(upgraded["version"], 4)
+        self.assertIsNone(upgraded["pending_confirmation"])
 
     def test_action_ids_can_be_reserved_before_a_failed_attempt(self) -> None:
         session = self.manager.create(session_id="sess_reserved_actions")
@@ -241,6 +259,65 @@ class SessionManagerTests(unittest.TestCase):
         with self.assertRaises(SessionError) as raised:
             self.manager.reserve_action_ids(session, ("attempt1",))
         self.assertEqual(raised.exception.code, "duplicate_action_id")
+
+    def test_pending_confirmation_persists_exact_action_and_requires_resolution(self) -> None:
+        session = self.manager.create(session_id="sess_pending_confirmation")
+        action = Action(
+            id="overwrite1",
+            tool="overwrite-file",
+            path=PathRef("src/app.py", Root.OUTPUT),
+            arguments=(Argument("content", "print('new')\n"),),
+            expect_confirm=True,
+        )
+        self.manager.reserve_action_ids(session, (action.id,))
+        self.manager.request_confirmation(
+            session,
+            action,
+            "overwrite a non-empty output file",
+            "a" * 64,
+        )
+
+        loaded = self.manager.load(session.id)
+        self.assertEqual(loaded.state.status, SessionStatus.WAITING_USER)
+        self.assertEqual(loaded.state.pending_confirmation.action, action)
+        self.assertEqual(loaded.state.result_history, ())
+
+        with self.assertRaises(SessionError) as raised:
+            self.manager.set_status(loaded, SessionStatus.ACTIVE)
+        self.assertEqual(raised.exception.code, "confirmation_pending")
+
+        denial = Result(
+            action.id,
+            ResultStatus.FAILURE,
+            body="Human denied this action.",
+        )
+        self.manager.record_action_result(
+            loaded,
+            action.tool,
+            denial,
+            resolve_confirmation=True,
+        )
+        resolved = self.manager.load(session.id)
+        self.assertEqual(resolved.state.status, SessionStatus.ACTIVE)
+        self.assertIsNone(resolved.state.pending_confirmation)
+        self.assertEqual(resolved.state.action(action.id).result, denial)
+
+    def test_aborting_a_pending_confirmation_clears_it(self) -> None:
+        session = self.manager.create(session_id="sess_abort_confirmation")
+        action = Action(
+            "overwrite1",
+            "overwrite-file",
+            path=PathRef("app.py", Root.OUTPUT),
+            arguments=(Argument("content", "new"),),
+            expect_confirm=True,
+        )
+        self.manager.reserve_action_ids(session, (action.id,))
+        self.manager.request_confirmation(session, action, "replace app.py", "b" * 64)
+        self.manager.set_status(session, SessionStatus.ABORTED)
+
+        loaded = self.manager.load(session.id)
+        self.assertEqual(loaded.state.status, SessionStatus.ABORTED)
+        self.assertIsNone(loaded.state.pending_confirmation)
 
     def test_step_limit_extension_requires_waiting_at_the_limit(self) -> None:
         session = self.manager.create(max_steps=2, session_id="sess_extend")

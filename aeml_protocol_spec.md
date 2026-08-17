@@ -524,6 +524,19 @@ Resolved by the agent CLI implementation:
   `--additional-steps` option. Non-interactive pauses return a distinct resumable exit code.
 - `swoon chat` and the legacy entrypoints remain unstructured relays and never execute AEML.
 
+Resolved by the output filesystem mutation implementation:
+
+- `create-file`, `overwrite-file`, `append-file`, `edit-file`, `copy-file`, and `copy-dir` are
+  executable through a separate agent allowlist; input remains read-only and every other
+  mutating/executing registry schema stays disabled.
+- File publication is descriptor-relative, no-follow, bounded, and atomic. Directory copies use
+  exclusive destinations, filter credential-shaped entries, and clean up handled failures.
+- Chunk sequences advance atomically with successful action results and continue to block
+  dependent reads until finalization.
+- Non-empty overwrites persist the exact action and an opaque target snapshot guard before
+  returning for real-human approval. Approval survives process restart and fails closed if the
+  target changed; denial leaves it untouched.
+
 Remaining open items:
 
 - Whether background processes (`run-command-background`) need a heartbeat tag so the

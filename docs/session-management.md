@@ -50,6 +50,7 @@ owner could otherwise change permission bits.
 - Every action ID accepted for dispatch, including attempts that returned an error
 - Chunk sequence state
 - Background-process handles and output offsets
+- One exact destructive action awaiting human confirmation, including its target guard
 
 Updates use an exclusive per-session lock, an optimistic revision check, file `fsync`, atomic
 replacement, and directory `fsync`. A stale in-memory session cannot overwrite a newer state.
@@ -58,8 +59,9 @@ The state loader validates the complete JSON schema and rejects mismatched IDs, 
 duplicate records, impossible timestamps, input-root chunks, broad state-file permissions, or a
 writable/tampered input tree.
 
-The current state schema is version 3. Versions 1 and 2 remain readable and are upgraded on the
-next state update; their completed-result history seeds the new durable used-action-ID set.
+The current state schema is version 4. Versions 1 through 3 remain readable and are upgraded on
+the next state update; older completed-result history seeds the durable used-action-ID set.
+Version 4 adds the optional pending-confirmation record.
 
 ## Lifecycle operations
 
@@ -72,12 +74,19 @@ next state update; their completed-result history seeds the new durable used-act
 - `reserve_action_ids`
 - `record_action_result`
 - `record_chunk`
+- `request_confirmation`
+- `clear_pending_confirmation`
 - `register_process`
 - `update_process`
 
 `reserve_action_ids` is called before dispatch, so an attempted action ID cannot be reused after
 a tool failure or process restart. `extend_step_limit` succeeds only while the session is
 waiting at an exhausted limit; this keeps budget approval on the human-facing API side.
+
+`request_confirmation` requires an already-reserved action ID and atomically changes the
+session to `waiting_user`. A normal status transition cannot reopen it as active; orchestration
+must approve/deny the exact persisted action, or abort. Successful approval and denial both
+clear the pending record while recording the result. Terminal abort/completion also clear it.
 
 None of these methods execute an AEML action or resolve an LLM-provided filesystem path. Policy,
 tool execution, and orchestration remain separate boundaries.

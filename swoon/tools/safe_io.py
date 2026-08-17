@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -98,6 +99,46 @@ class SafeIO:
             ) from error
         try:
             yield descriptors[-1]
+        finally:
+            self._close_all(descriptors)
+
+    @contextmanager
+    def open_parent(self, resolved: ResolvedPath) -> Iterator[tuple[int, str, ResolvedPath]]:
+        """Open and verify a target's parent, including when the target is absent."""
+
+        if not self.secure_openat:
+            raise ToolExecutionError(
+                "platform_unsupported",
+                "Secure no-follow file access is unavailable on this platform",
+            )
+        try:
+            fresh = self.policy.revalidate(resolved)
+        except PathPolicyError as error:
+            raise ToolExecutionError(
+                error.code,
+                str(error),
+                retryable=error.code == "path_changed",
+            ) from error
+        parts = tuple() if fresh.reference.value == "." else tuple(
+            fresh.reference.value.split("/")
+        )
+        if not parts:
+            raise ToolExecutionError("path_escape", "This operation cannot target the root")
+
+        expected_fingerprints = len(parts) + (1 if fresh.exists else 0)
+        if len(fresh.fingerprints) != expected_fingerprints:
+            raise ToolExecutionError("path_changed", "Authorized path fingerprint is stale")
+
+        descriptors: list[int] = []
+        try:
+            root_fd = self._open_absolute_root(fresh)
+            descriptors.append(root_fd)
+            self._verify_fingerprint(os.fstat(root_fd), fresh.fingerprints[0])
+            for index, part in enumerate(parts[:-1], start=1):
+                descriptor = self._open_at(descriptors[-1], part, directory=True)
+                descriptors.append(descriptor)
+                self._verify_fingerprint(os.fstat(descriptor), fresh.fingerprints[index])
+            yield descriptors[-1], parts[-1], fresh
         finally:
             self._close_all(descriptors)
 
@@ -243,3 +284,182 @@ class SafeIO:
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+class SafeMutationIO:
+    """Atomic, descriptor-relative publication of bounded file payloads."""
+
+    def __init__(self, policy: PathPolicy) -> None:
+        self.policy = policy
+        self.io = SafeIO(policy)
+
+    def atomic_create(
+        self,
+        resolved: ResolvedPath,
+        payload: bytes,
+        *,
+        executable: bool = False,
+    ) -> None:
+        if resolved.exists:
+            raise ToolExecutionError("path_exists", "Target already exists")
+        with self.io.open_parent(resolved) as (parent_fd, name, fresh):
+            if fresh.exists:
+                raise ToolExecutionError("path_exists", "Target already exists")
+            temporary = self._temporary_name()
+            descriptor = self._create_temporary(parent_fd, temporary, executable=executable)
+            published = False
+            try:
+                self._write_payload(descriptor, payload, executable=executable)
+                try:
+                    os.link(
+                        temporary,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    published = True
+                except FileExistsError as error:
+                    raise ToolExecutionError("path_exists", "Target already exists") from error
+                except OSError as error:
+                    raise ToolExecutionError(
+                        "tool_failed",
+                        f"File could not be published ({error.__class__.__name__})",
+                        retryable=True,
+                    ) from error
+                os.unlink(temporary, dir_fd=parent_fd)
+                temporary = ""
+                self._fsync_directory(parent_fd)
+            finally:
+                os.close(descriptor)
+                if temporary:
+                    try:
+                        os.unlink(temporary, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
+                if not published:
+                    self._fsync_directory(parent_fd)
+
+    def atomic_replace(
+        self,
+        resolved: ResolvedPath,
+        payload: bytes,
+        *,
+        executable: bool,
+        require_empty: bool = False,
+    ) -> None:
+        if not resolved.exists:
+            raise ToolExecutionError("path_not_found", "Target does not exist")
+        with self.io.open_parent(resolved) as (parent_fd, name, fresh):
+            opened = self._verify_existing_target(parent_fd, name, fresh)
+            self._require_empty(opened, require_empty)
+            temporary = self._temporary_name()
+            descriptor = self._create_temporary(parent_fd, temporary, executable=executable)
+            try:
+                self._write_payload(descriptor, payload, executable=executable)
+                opened = self._verify_existing_target(parent_fd, name, fresh)
+                self._require_empty(opened, require_empty)
+                try:
+                    os.replace(
+                        temporary,
+                        name,
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=parent_fd,
+                    )
+                    temporary = ""
+                except OSError as error:
+                    raise ToolExecutionError(
+                        "tool_failed",
+                        f"File could not be replaced ({error.__class__.__name__})",
+                        retryable=True,
+                    ) from error
+                self._fsync_directory(parent_fd)
+            finally:
+                os.close(descriptor)
+                if temporary:
+                    try:
+                        os.unlink(temporary, dir_fd=parent_fd)
+                    except FileNotFoundError:
+                        pass
+
+    def _verify_existing_target(
+        self,
+        parent_fd: int,
+        name: str,
+        resolved: ResolvedPath,
+    ) -> os.stat_result:
+        try:
+            item_stat = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as error:
+            raise ToolExecutionError(
+                "path_changed",
+                f"Authorized target changed ({error.__class__.__name__})",
+                retryable=True,
+            ) from error
+        expected = resolved.fingerprints[-1]
+        SafeIO._verify_fingerprint(item_stat, expected)
+        if not stat.S_ISREG(item_stat.st_mode):
+            raise ToolExecutionError("not_file", "Target is not a regular file")
+        if self.policy.reject_hardlinks and item_stat.st_nlink > 1:
+            raise ToolExecutionError("path_escape", "Hard-linked files are not writable")
+        return item_stat
+
+    @staticmethod
+    def _require_empty(item_stat: os.stat_result, required: bool) -> None:
+        if required and item_stat.st_size > 0:
+            raise ToolExecutionError(
+                "confirmation_required",
+                "Overwrite target became non-empty before atomic replacement",
+            )
+
+    @staticmethod
+    def _temporary_name() -> str:
+        return f".swoon-tmp-{secrets.token_hex(16)}"
+
+    @staticmethod
+    def _create_temporary(parent_fd: int, name: str, *, executable: bool) -> int:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        try:
+            return os.open(
+                name,
+                flags,
+                0o700 if executable else 0o600,
+                dir_fd=parent_fd,
+            )
+        except OSError as error:
+            raise ToolExecutionError(
+                "tool_failed",
+                f"Temporary file could not be created ({error.__class__.__name__})",
+                retryable=True,
+            ) from error
+
+    @staticmethod
+    def _write_payload(descriptor: int, payload: bytes, *, executable: bool) -> None:
+        try:
+            view = memoryview(payload)
+            offset = 0
+            while offset < len(view):
+                written = os.write(descriptor, view[offset:])
+                if written < 1:
+                    raise OSError("short write")
+                offset += written
+            os.fchmod(descriptor, 0o700 if executable else 0o600)
+            os.fsync(descriptor)
+        except OSError as error:
+            raise ToolExecutionError(
+                "tool_failed",
+                f"File payload could not be written ({error.__class__.__name__})",
+                retryable=True,
+            ) from error
+
+    @staticmethod
+    def _fsync_directory(descriptor: int) -> None:
+        try:
+            os.fsync(descriptor)
+        except OSError as error:
+            raise ToolExecutionError(
+                "tool_failed",
+                f"Directory metadata could not be synchronized ({error.__class__.__name__})",
+                retryable=True,
+            ) from error

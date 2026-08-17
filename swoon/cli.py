@@ -1,4 +1,4 @@
-"""Command-line interfaces for the browser relay and read-only AEML agent."""
+"""Command-line interfaces for the browser relay and bounded AEML agent."""
 
 from __future__ import annotations
 
@@ -6,14 +6,16 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+from .aeml import AEMLPromptBuilder
 from .orchestration import (
+    AgentOrchestrator,
     OrchestrationLimits,
-    ReadOnlyOrchestrator,
     RunResult,
     RunStopReason,
 )
 from .session import DEFAULT_MAX_STEPS, Session, SessionManager, SessionStatus
 from .transport import AEMLChatChannel, ChatGPTWebTransport
+from .tools import AgentToolDispatcher
 
 
 EXIT_SUCCESS = 0
@@ -31,7 +33,7 @@ _ABORT_COMMANDS = frozenset({"/abort", "/quit"})
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="swoon",
-        description="ChatGPT browser relay and bounded read-only AEML agent",
+        description="ChatGPT browser relay and bounded AEML coding agent",
     )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
@@ -41,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--interactive", "-i", action="store_true")
     chat.set_defaults(handler=_run_chat)
 
-    agent = commands.add_parser("agent", help="run a bounded read-only AEML session")
+    agent = commands.add_parser("agent", help="run a bounded AEML coding session")
     _add_browser_arguments(agent)
     agent.add_argument("--prompt", "-p", help="initial task or answer for a resumed session")
     source = agent.add_mutually_exclusive_group()
@@ -77,6 +79,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--non-interactive",
         action="store_true",
         help="return exit 6 instead of reading human input",
+    )
+    pending = agent.add_mutually_exclusive_group()
+    pending.add_argument(
+        "--approve-pending",
+        action="store_true",
+        help="approve the exact destructive action stored by a resumed session",
+    )
+    pending.add_argument(
+        "--deny-pending",
+        action="store_true",
+        help="deny the exact destructive action stored by a resumed session",
     )
     agent.set_defaults(handler=_run_agent)
     return parser
@@ -165,6 +178,12 @@ def _run_agent(args: argparse.Namespace) -> int:
     if args.resume is None and args.additional_steps is not None:
         print("Error: --additional-steps requires --resume.", file=sys.stderr)
         return EXIT_USAGE
+    if args.resume is None and (args.approve_pending or args.deny_pending):
+        print(
+            "Error: pending-action decisions require --resume.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     if args.prompt is not None and not args.prompt.strip():
         print("Error: --prompt cannot be empty.", file=sys.stderr)
         return EXIT_USAGE
@@ -182,6 +201,12 @@ def _run_agent(args: argparse.Namespace) -> int:
         if terminal is not None:
             return terminal
         if args.additional_steps is not None:
+            if session.state.pending_confirmation is not None:
+                print(
+                    "Error: resolve the pending action before extending steps.",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
             if session.state.step < session.state.max_steps:
                 print(
                     "Error: --additional-steps requires an exhausted session.",
@@ -195,7 +220,38 @@ def _run_agent(args: argparse.Namespace) -> int:
                 )
                 return EXIT_USAGE
 
-    prompt = _initial_prompt(args)
+    initial_confirmation: bool | None = None
+    if session is not None and session.state.pending_confirmation is not None:
+        if args.approve_pending:
+            initial_confirmation = True
+        elif args.deny_pending:
+            initial_confirmation = False
+        elif args.non_interactive:
+            _report_input_required(session, "destructive-action approval or denial")
+            return EXIT_INPUT_REQUIRED
+        else:
+            initial_confirmation, abort = _read_pending_confirmation(session)
+            if abort:
+                manager.set_status(session, SessionStatus.ABORTED)
+                print("Session aborted by the user.", file=sys.stderr)
+                return EXIT_ABORTED
+            if initial_confirmation is None:
+                _report_input_required(session, "destructive-action approval or denial")
+                return EXIT_INPUT_REQUIRED
+        prompt = (
+            args.prompt.strip()
+            if args.prompt is not None
+            else (
+                "The human approved the pending action. Continue."
+                if initial_confirmation
+                else "The human denied the pending action. Continue safely."
+            )
+        )
+    else:
+        if args.approve_pending or args.deny_pending:
+            print("Error: the resumed session has no pending action.", file=sys.stderr)
+            return EXIT_USAGE
+        prompt = _initial_prompt(args)
     if prompt is None:
         return EXIT_INPUT_REQUIRED
     if prompt in _ABORT_COMMANDS:
@@ -220,9 +276,12 @@ def _run_agent(args: argparse.Namespace) -> int:
     try:
         client = _transport(args)
         client.start()
-        orchestrator = ReadOnlyOrchestrator(
+        dispatcher = AgentToolDispatcher(manager)
+        prompt_builder = AEMLPromptBuilder(dispatcher.tool_specs)
+        orchestrator = AgentOrchestrator(
             manager,
-            AEMLChatChannel(client),
+            AEMLChatChannel(client, prompt_builder=prompt_builder),
+            dispatcher=dispatcher,
             limits=OrchestrationLimits(args.protocol_retries),
             message_sink=_print_agent_message,
         )
@@ -234,6 +293,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             session,
             prompt,
             additional_steps=args.additional_steps,
+            confirmation=initial_confirmation,
         )
         return _drive_agent_outcome(
             manager,
@@ -251,7 +311,7 @@ def _run_agent(args: argparse.Namespace) -> int:
 
 def _drive_agent_outcome(
     manager: SessionManager,
-    orchestrator: ReadOnlyOrchestrator,
+    orchestrator: AgentOrchestrator,
     outcome: RunResult,
     *,
     non_interactive: bool,
@@ -296,6 +356,36 @@ def _drive_agent_outcome(
                 if answer_was_blocked_by_limit
                 and outcome.reason is RunStopReason.STEP_LIMIT
                 else None
+            )
+            continue
+
+        if outcome.reason is RunStopReason.AWAITING_CONFIRMATION:
+            if non_interactive:
+                _report_input_required(
+                    outcome.session,
+                    "destructive-action approval or denial",
+                )
+                return EXIT_INPUT_REQUIRED
+            decision, abort = _read_pending_confirmation(outcome.session)
+            if abort:
+                manager.set_status(outcome.session, SessionStatus.ABORTED)
+                print("Session aborted by the user.", file=sys.stderr)
+                return EXIT_ABORTED
+            if decision is None:
+                _report_input_required(
+                    outcome.session,
+                    "destructive-action approval or denial",
+                )
+                return EXIT_INPUT_REQUIRED
+            decision_prompt = (
+                "The human approved the pending action. Continue."
+                if decision
+                else "The human denied the pending action. Continue safely."
+            )
+            outcome = orchestrator.run(
+                outcome.session,
+                decision_prompt,
+                confirmation=decision,
             )
             continue
 
@@ -374,6 +464,27 @@ def _read_step_extension(session: Session) -> tuple[int | None, bool]:
         if 1 <= value <= maximum:
             return value, False
         print(f"Enter a whole number from 1 to {maximum}, or /abort.", file=sys.stderr)
+
+
+def _read_pending_confirmation(session: Session) -> tuple[bool | None, bool]:
+    pending = session.state.pending_confirmation
+    if pending is None:
+        raise RuntimeError("Session has no pending confirmation")
+    print(
+        f"Pending {pending.action.tool} action {pending.action.id!r}: {pending.reason}"
+    )
+    while True:
+        try:
+            raw = input("Approve this exact action? [y/N] (/abort to stop)> ").strip().lower()
+        except EOFError:
+            return None, False
+        if raw in _ABORT_COMMANDS:
+            return None, True
+        if raw in {"y", "yes"}:
+            return True, False
+        if raw in {"", "n", "no"}:
+            return False, False
+        print("Enter y, n, or /abort.", file=sys.stderr)
 
 
 def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:

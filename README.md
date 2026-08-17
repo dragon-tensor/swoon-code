@@ -22,6 +22,7 @@ Implemented foundations:
 8. Bounded AEML context, generated prompts, and validated single exchanges
 9. Bounded read-only orchestration, protocol repair, and human pauses
 10. Agent CLI with session create/resume and interactive lifecycle handling
+11. Output-only filesystem mutation with atomic file writes and resumable confirmation
 
 The currently executable AEML tools are:
 
@@ -32,11 +33,19 @@ The currently executable AEML tools are:
 - `git-diff`
 - `git-log`
 - `list-dependencies`
+- `create-file`
+- `overwrite-file` (real-human confirmation for a non-empty target)
+- `append-file`
+- `edit-file`
+- `copy-file`
+- `copy-dir`
 
-Mutating tools and arbitrary command execution remain disabled. The `swoon agent` command can
-drive the seven read capabilities until completion, a human question, a step-limit pause, an
-explicit abort, or bounded protocol-repair exhaustion. The separate `swoon chat` command and
-legacy `chatgpt.sh` wrapper remain direct chatbot relays.
+Writes are confined to the session output root; input stays read-only. Delete/move/chmod, Git
+mutations, package changes, builds/tests, and arbitrary commands remain disabled. The `swoon
+agent` command can drive these thirteen capabilities until completion, a human question,
+destructive confirmation, a step-limit pause, an explicit abort, or bounded protocol-repair
+exhaustion. The separate `swoon chat` command and legacy `chatgpt.sh` wrapper remain direct
+chatbot relays.
 
 ## Setup
 
@@ -49,7 +58,7 @@ python3 -m venv .venv
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
 Cookie-Editor list and a Playwright storage-state object are accepted.
 
-## Read-only agent CLI
+## Agent CLI
 
 Create a session by importing an existing project as read-only input:
 
@@ -57,7 +66,7 @@ Create a session by importing an existing project as read-only input:
 .venv/bin/swoon agent \
   --cookies cookies.json \
   --project /path/to/project \
-  --prompt "Inspect this project and explain its entry points."
+  --prompt "Copy this project to output and add a health endpoint."
 ```
 
 The command prints the session ID before starting the browser. If the agent asks a question or
@@ -83,8 +92,19 @@ exhausted session can be resumed with explicit approval:
   --non-interactive
 ```
 
-This phase can inspect only. It cannot copy a project into the output root, modify files, run
-tests, install packages, or execute arbitrary commands.
+If a non-empty overwrite is waiting for destructive approval, resume the exact stored action
+with `--approve-pending` or `--deny-pending`. Neither flag approves future actions:
+
+```bash
+.venv/bin/swoon agent \
+  --cookies cookies.json \
+  --resume sess_EXAMPLE \
+  --approve-pending \
+  --non-interactive
+```
+
+The agent can copy and modify output files, but it still cannot delete files, run tests, install
+packages, mutate Git, or execute arbitrary commands.
 
 ## Browser relay
 
@@ -123,7 +143,7 @@ validated = AEMLValidator().validate(
 responses = ReadOnlyToolDispatcher(sessions).execute_message(validated, session)
 ```
 
-Only validated read actions on the explicit Phase 7 allowlist can execute. Successes are
+This compatibility example executes only validated reads on the Phase 7 allowlist. Successes are
 persisted for idempotent replay; failures are returned as structured protocol errors.
 
 To send one protocol turn through the browser transport:
@@ -149,7 +169,7 @@ To send one protocol turn through the browser transport:
 
 This returns an inert ValidatedMessage; it does not execute tools or continue automatically.
 
-To let the interpreter own the validated read-only loop:
+To let the interpreter own a read-only compatibility loop:
 
     from swoon import ReadOnlyOrchestrator, SessionManager
     from swoon.transport import AEMLChatChannel, ChatGPTWebTransport
@@ -168,6 +188,10 @@ To let the interpreter own the validated read-only loop:
 If a step limit is reached, only a later human-side call with `additional_steps=N` can extend
 it. See the orchestration guide for pause/resume examples and exact failure semantics.
 
+The `swoon agent` command instead opts into `AgentToolDispatcher` and `AgentOrchestrator`, using
+one capability-derived prompt/validator allowlist for the seven reads and six filesystem
+mutations. See the filesystem-mutation guide for the embedding API and confirmation flow.
+
 ## Documentation
 
 - `aeml_protocol_spec.md` — protocol contract
@@ -177,6 +201,7 @@ it. See the orchestration guide for pause/resume examples and exact failure sema
 - `docs/context-and-prompts.md` — Phase 8 context and transport bridge
 - `docs/read-only-orchestration.md` — Phase 9 autonomous read-only loop
 - `docs/agent-cli.md` — Phase 10 command-line lifecycle and exit codes
+- `docs/filesystem-mutations.md` — Phase 11 write boundary and confirmation lifecycle
 - `MIGRATION.md` — original relay history
 
 ## Tests

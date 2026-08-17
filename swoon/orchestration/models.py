@@ -15,6 +15,7 @@ class RunStopReason(str, Enum):
     COMPLETED = "completed"
     DONE = "done"
     AWAITING_USER = "awaiting_user"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
     STEP_LIMIT = "step_limit"
     ABORTED = "aborted"
     PROTOCOL_ERROR = "protocol_error"

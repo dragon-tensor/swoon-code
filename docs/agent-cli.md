@@ -1,9 +1,10 @@
 # Agent CLI
 
-Phase 10 exposes the bounded Phase 9 engine as `swoon agent` while preserving the original raw
-relay as `swoon chat`. The agent command is still read-only: it advertises and dispatches only
-`read-file`, `list-dir`, `grep`, `git-status`, `git-diff`, `git-log`, and
-`list-dependencies`.
+Phase 10 exposed the bounded engine as `swoon agent` while preserving the original raw relay as
+`swoon chat`. Phase 11 keeps that lifecycle and adds six output-only filesystem mutations:
+`create-file`, `overwrite-file`, `append-file`, `edit-file`, `copy-file`, and `copy-dir`, in
+addition to the seven read tools. Arbitrary commands and all other mutating schemas remain
+disabled.
 
 ## Create a session
 
@@ -42,6 +43,41 @@ At the step limit, interactive mode asks for a positive number of additional ste
 budget cannot exceed 10,000. This terminal input becomes the explicit human-side approval
 required by `SessionManager.extend_step_limit`; neither AEML nor prompt text can extend the
 budget.
+
+## Destructive overwrite confirmation
+
+An `overwrite-file` action targeting a non-empty file pauses independently of `<ask_user>` and
+the step limit. The exact action and target guard are persisted before the CLI asks:
+
+```text
+Pending overwrite-file action 'overwrite1': ...
+Approve this exact action? [y/N] (/abort to stop)>
+```
+
+Empty input means denial. Denial leaves the target untouched and returns a failure result to the
+agent; `/abort` aborts the whole session. Approval fails closed with `confirmation_stale` if the
+target changed while the prompt was waiting.
+
+In non-interactive mode, an unavailable decision returns exit 6. A later process decides only
+the stored action:
+
+```bash
+.venv/bin/swoon agent \
+  --cookies cookies.json \
+  --resume sess_EXAMPLE \
+  --approve-pending \
+  --non-interactive
+
+# Or leave the target unchanged:
+.venv/bin/swoon agent \
+  --cookies cookies.json \
+  --resume sess_EXAMPLE \
+  --deny-pending \
+  --non-interactive
+```
+
+The flags are mutually exclusive, require `--resume`, and fail if no confirmation is pending.
+They do not approve later destructive actions.
 
 ## Resume
 
@@ -83,7 +119,7 @@ exhausted. A non-exhausted `<ask_user>` pause does not permit a budget extension
 | 3 | User or AEML abort |
 | 4 | AEML remained invalid after the configured repair attempts |
 | 5 | Session, browser, transport, or local orchestration failure |
-| 6 | Human answer or step approval is required but unavailable |
+| 6 | Human answer, destructive decision, or step approval is required but unavailable |
 | 130 | Interrupted while browser/orchestration work was active |
 
 On exit 6, the session remains `waiting_user` and can be resumed. Protocol exhaustion persists

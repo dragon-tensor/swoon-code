@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Iterable, Iterator
 
-from swoon.aeml.models import PathRef, Result, ResultStatus, Root
+from swoon.aeml.models import Action, PathRef, Result, ResultStatus, Root
 
 from .errors import (
     SessionConflictError,
@@ -30,6 +30,7 @@ from .models import (
     ActionRecord,
     ChunkRecord,
     ImportLimits,
+    PendingConfirmation,
     ProcessRecord,
     PROCESS_HANDLE_PATTERN,
     ProcessStatus,
@@ -262,12 +263,28 @@ class SessionManager:
         def mutate(state: SessionState) -> SessionState:
             if status == state.status:
                 return state
+            if (
+                state.pending_confirmation is not None
+                and status is SessionStatus.ACTIVE
+            ):
+                raise SessionError(
+                    "confirmation_pending",
+                    "A pending confirmation must be approved or denied explicitly",
+                )
             if status not in transitions[state.status]:
                 raise SessionError(
                     "invalid_status_transition",
                     f"Cannot transition from {state.status.value} to {status.value}",
                 )
-            return replace(state, status=status)
+            return replace(
+                state,
+                status=status,
+                pending_confirmation=(
+                    None
+                    if status in {SessionStatus.COMPLETED, SessionStatus.ABORTED}
+                    else state.pending_confirmation
+                ),
+            )
 
         return self._update(session, mutate)
 
@@ -278,6 +295,10 @@ class SessionManager:
         result: Result,
         *,
         action_digest: str | None = None,
+        chunk_path: PathRef | None = None,
+        chunk_seq: int | None = None,
+        chunk_final: bool | None = None,
+        resolve_confirmation: bool = False,
     ) -> Session:
         if not isinstance(tool, str) or not tool.strip():
             raise SessionError("invalid_action_record", "Tool name cannot be empty")
@@ -298,9 +319,44 @@ class SessionManager:
             or not re.fullmatch(r"[0-9a-f]{64}", action_digest)
         ):
             raise SessionError("invalid_action_record", "Invalid action digest")
+        chunk_values = (chunk_path, chunk_seq, chunk_final)
+        if any(value is not None for value in chunk_values):
+            if (
+                not isinstance(chunk_path, PathRef)
+                or type(chunk_seq) is not int
+                or chunk_seq < 1
+                or type(chunk_final) is not bool
+            ):
+                raise SessionError(
+                    "chunk_sequence_error",
+                    "Chunk result metadata must be supplied together",
+                )
+        if type(resolve_confirmation) is not bool:
+            raise SessionError(
+                "invalid_action_record",
+                "resolve_confirmation must be boolean",
+            )
 
         def mutate(state: SessionState) -> SessionState:
-            self._require_active(state)
+            if resolve_confirmation:
+                pending = state.pending_confirmation
+                if (
+                    state.status is not SessionStatus.WAITING_USER
+                    or pending is None
+                    or pending.action.id != result.action_id
+                    or pending.action.tool != tool
+                ):
+                    raise SessionError(
+                        "confirmation_mismatch",
+                        "Result does not match the pending confirmation",
+                    )
+                state = replace(
+                    state,
+                    status=SessionStatus.ACTIVE,
+                    pending_confirmation=None,
+                )
+            else:
+                self._require_active(state)
             if state.action(result.action_id) is not None:
                 raise SessionError(
                     "duplicate_action_id",
@@ -313,6 +369,14 @@ class SessionManager:
                 completed_at=self._now(),
                 action_digest=action_digest,
             )
+            if chunk_path is not None:
+                assert chunk_seq is not None and chunk_final is not None
+                state = self._state_with_chunk(
+                    state,
+                    chunk_path,
+                    seq=chunk_seq,
+                    final=chunk_final,
+                )
             return replace(
                 state,
                 action_ledger=state.action_ledger + (record,),
@@ -322,6 +386,81 @@ class SessionManager:
                     if result.action_id in state.used_action_ids
                     else state.used_action_ids + (result.action_id,)
                 ),
+            )
+
+        return self._update(session, mutate)
+
+    def request_confirmation(
+        self,
+        session: Session,
+        action: Action,
+        reason: str,
+        guard: str,
+    ) -> Session:
+        """Persist one exact action before returning control to a human."""
+
+        if (
+            not isinstance(action, Action)
+            or not ACTION_ID_PATTERN.fullmatch(action.id)
+            or action.expect_confirm is not True
+        ):
+            raise SessionError(
+                "invalid_confirmation",
+                "A confirmation-marked structured action is required",
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            raise SessionError("invalid_confirmation", "Confirmation reason cannot be empty")
+        if len(reason.encode("utf-8")) > 16 * 1024:
+            raise SessionError("invalid_confirmation", "Confirmation reason is too large")
+        if not isinstance(guard, str) or not re.fullmatch(r"[0-9a-f]{64}", guard):
+            raise SessionError("invalid_confirmation", "Invalid confirmation guard")
+
+        def mutate(state: SessionState) -> SessionState:
+            self._require_active(state)
+            if state.pending_confirmation is not None:
+                raise SessionError(
+                    "confirmation_pending",
+                    "Another action is already awaiting confirmation",
+                )
+            if action.id not in state.used_action_ids:
+                raise SessionError(
+                    "invalid_confirmation",
+                    "Pending action ID must be reserved before confirmation",
+                )
+            if state.action(action.id) is not None:
+                raise SessionError(
+                    "duplicate_action_id",
+                    f"Action {action.id!r} already has a persisted result",
+                )
+            return replace(
+                state,
+                status=SessionStatus.WAITING_USER,
+                pending_confirmation=PendingConfirmation(
+                    action=action,
+                    reason=reason.strip(),
+                    guard=guard,
+                    requested_at=self._now(),
+                ),
+            )
+
+        return self._update(session, mutate)
+
+    def clear_pending_confirmation(self, session: Session) -> Session:
+        """Clear a failed approved action without treating it as a denial result."""
+
+        def mutate(state: SessionState) -> SessionState:
+            if (
+                state.status is not SessionStatus.WAITING_USER
+                or state.pending_confirmation is None
+            ):
+                raise SessionError(
+                    "confirmation_not_pending",
+                    "The session has no pending confirmation",
+                )
+            return replace(
+                state,
+                status=SessionStatus.ACTIVE,
+                pending_confirmation=None,
             )
 
         return self._update(session, mutate)
@@ -343,29 +482,44 @@ class SessionManager:
 
         def mutate(state: SessionState) -> SessionState:
             self._require_active(state)
-            existing = state.chunk(path)
-            if existing is None:
-                if seq != 1:
-                    raise SessionError("chunk_sequence_error", "A new chunk sequence must start at 1")
-                record = ChunkRecord(path, next_seq=2, finalized=final, updated_at=self._now())
-                return replace(state, chunks=state.chunks + (record,))
-            if existing.finalized:
-                raise SessionError("chunk_sequence_error", "Chunk sequence is already finalized")
-            if seq != existing.next_seq:
-                raise SessionError(
-                    "chunk_sequence_error",
-                    f"Expected chunk sequence {existing.next_seq}, received {seq}",
-                )
-            replacement = replace(
-                existing,
-                next_seq=seq + 1,
-                finalized=final,
-                updated_at=self._now(),
-            )
-            chunks = tuple(replacement if item.path == path else item for item in state.chunks)
-            return replace(state, chunks=chunks)
+            return self._state_with_chunk(state, path, seq=seq, final=final)
 
         return self._update(session, mutate)
+
+    def _state_with_chunk(
+        self,
+        state: SessionState,
+        path: PathRef,
+        *,
+        seq: int,
+        final: bool,
+    ) -> SessionState:
+        if path.root is not Root.OUTPUT:
+            raise SessionError("input_readonly", "Chunk writes may only target the output root")
+        existing = state.chunk(path)
+        if existing is None:
+            if seq != 1:
+                raise SessionError(
+                    "chunk_sequence_error",
+                    "A new chunk sequence must start at 1",
+                )
+            record = ChunkRecord(path, next_seq=2, finalized=final, updated_at=self._now())
+            return replace(state, chunks=state.chunks + (record,))
+        if existing.finalized:
+            raise SessionError("chunk_sequence_error", "Chunk sequence is already finalized")
+        if seq != existing.next_seq:
+            raise SessionError(
+                "chunk_sequence_error",
+                f"Expected chunk sequence {existing.next_seq}, received {seq}",
+            )
+        replacement = replace(
+            existing,
+            next_seq=seq + 1,
+            finalized=final,
+            updated_at=self._now(),
+        )
+        chunks = tuple(replacement if item.path == path else item for item in state.chunks)
+        return replace(state, chunks=chunks)
 
     def register_process(self, session: Session, *, pid: int, handle: str | None = None) -> str:
         if type(pid) is not int or pid < 1:

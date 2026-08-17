@@ -113,8 +113,10 @@ steps through AEML or user-prompt text.
 - `message_sink` failures raise `message_sink_failed`; lifecycle changes already made remain
   durable.
 
-This phase is intentionally read-only. File mutation, command execution, package installation,
-tests, builds, and Git writes require later policy and sandbox phases.
+This Phase 9 compatibility API remains intentionally read-only. Phase 11 adds a separate
+`AgentOrchestrator`/`AgentToolDispatcher` opt-in for six output filesystem mutations; command
+execution, package installation, tests, builds, and Git writes still require later sandbox
+phases.
 
 Phase 10 exposes this API through `swoon agent`, including session creation/resume, terminal
 answers, explicit step approval, and deterministic exit codes. See `agent-cli.md`.

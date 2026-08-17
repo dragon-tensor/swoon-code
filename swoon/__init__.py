@@ -9,6 +9,8 @@ from .aeml import (
     ContextLimits,
 )
 from .orchestration import (
+    AEMLOrchestrator,
+    AgentOrchestrator,
     OrchestrationError,
     OrchestrationLimits,
     ReadOnlyOrchestrator,
@@ -17,14 +19,17 @@ from .orchestration import (
 )
 from .policy import PathPolicy
 from .session import SessionManager
-from .tools import ReadOnlyToolDispatcher
+from .tools import AgentToolDispatcher, ReadOnlyToolDispatcher
 
 __all__ = [
     "AEMLContextBuilder",
     "AEMLContextRenderer",
+    "AEMLOrchestrator",
     "AEMLParser",
     "AEMLPromptBuilder",
     "AEMLValidator",
+    "AgentOrchestrator",
+    "AgentToolDispatcher",
     "ContextLimits",
     "OrchestrationError",
     "OrchestrationLimits",

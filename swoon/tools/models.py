@@ -32,3 +32,25 @@ class ReadToolLimits:
             raise ValueError("Read-tool limits must be positive integers")
         if self.git_timeout_seconds <= 0:
             raise ValueError("Git timeout must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class MutationToolLimits:
+    """Hard bounds for interpreter-side filesystem mutations."""
+
+    max_content_bytes: int = 512 * 1024
+    max_file_bytes: int = 64 * 1024 * 1024
+    max_copy_entries: int = 100_000
+    max_copy_bytes: int = 512 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        values = (
+            self.max_content_bytes,
+            self.max_file_bytes,
+            self.max_copy_entries,
+            self.max_copy_bytes,
+        )
+        if any(type(value) is not int or value < 1 for value in values):
+            raise ValueError("Mutation-tool limits must be positive integers")
+        if self.max_content_bytes > self.max_file_bytes:
+            raise ValueError("max_content_bytes cannot exceed max_file_bytes")

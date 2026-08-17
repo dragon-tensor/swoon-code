@@ -362,6 +362,122 @@ class CLITests(unittest.TestCase):
         self.assertIn("<user_prompt>Continue</user_prompt>", second_browser.prompts[0])
         self.assertEqual(second_stderr, "")
 
+    def test_non_interactive_overwrite_confirmation_resumes_with_exact_approval(self) -> None:
+        session_id = "sess_cli_confirmation"
+        manager = SessionManager(self.sessions)
+        session = manager.create(session_id=session_id)
+        target = session.paths.host_output / "app.py"
+        target.write_text("old", encoding="utf-8")
+        first_browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    '<action id="overwrite1"><tool>overwrite-file</tool><path>app.py</path>'
+                    "<args><content>new</content></args>"
+                    "<expect_confirm>true</expect_confirm></action>"
+                    "<next>await_result</next></aeml>"
+                )
+            ]
+        )
+
+        first_code, _, first_stderr = self.invoke(
+            self.agent_args(
+                "--resume",
+                session_id,
+                "--prompt",
+                "Replace app.py",
+                "--non-interactive",
+            ),
+            first_browser,
+        )
+
+        waiting = manager.load(session_id)
+        self.assertEqual(first_code, EXIT_INPUT_REQUIRED)
+        self.assertIsNotNone(waiting.state.pending_confirmation)
+        self.assertEqual(target.read_text(encoding="utf-8"), "old")
+        self.assertIn("approval or denial", first_stderr)
+
+        second_browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    "<complete>Approved replacement complete.</complete></aeml>"
+                )
+            ]
+        )
+        second_code, second_stdout, second_stderr = self.invoke(
+            self.agent_args(
+                "--resume",
+                session_id,
+                "--approve-pending",
+                "--non-interactive",
+            ),
+            second_browser,
+        )
+
+        completed = manager.load(session_id)
+        self.assertEqual(second_code, EXIT_SUCCESS)
+        self.assertEqual(completed.state.status, SessionStatus.COMPLETED)
+        self.assertIsNone(completed.state.pending_confirmation)
+        self.assertEqual(target.read_text(encoding="utf-8"), "new")
+        self.assertIn("Approved replacement complete.", second_stdout)
+        self.assertIn('<result id="overwrite1">', second_browser.prompts[0])
+        self.assertEqual(second_stderr, "")
+
+    def test_interactive_denial_keeps_original_file(self) -> None:
+        session_id = "sess_cli_denial"
+        manager = SessionManager(self.sessions)
+        session = manager.create(session_id=session_id)
+        target = session.paths.host_output / "app.py"
+        target.write_text("old", encoding="utf-8")
+        browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    '<action id="overwrite1"><tool>overwrite-file</tool><path>app.py</path>'
+                    "<args><content>new</content></args>"
+                    "<expect_confirm>true</expect_confirm></action>"
+                    "<next>await_result</next></aeml>"
+                ),
+                (
+                    f'<aeml turn="2" session="{session_id}">'
+                    "<complete>Kept the original file.</complete></aeml>"
+                ),
+            ]
+        )
+
+        code, stdout, stderr = self.invoke(
+            self.agent_args("--resume", session_id, "--prompt", "Replace app.py"),
+            browser,
+            inputs=["n"],
+        )
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertEqual(target.read_text(encoding="utf-8"), "old")
+        self.assertIn("Pending overwrite-file", stdout)
+        self.assertIn("Kept the original file.", stdout)
+        self.assertIn("<status>failure</status>", browser.prompts[1])
+        self.assertEqual(stderr, "")
+
+    def test_pending_decision_flag_rejects_session_without_pending_action(self) -> None:
+        session_id = "sess_cli_no_pending"
+        SessionManager(self.sessions).create(session_id=session_id)
+        browser = FakeBrowserTransport([])
+
+        code, _, stderr = self.invoke(
+            self.agent_args(
+                "--resume",
+                session_id,
+                "--approve-pending",
+                "--non-interactive",
+            ),
+            browser,
+        )
+
+        self.assertEqual(code, EXIT_USAGE)
+        self.assertFalse(browser.started)
+        self.assertIn("no pending action", stderr)
+
     def test_resume_at_step_limit_preserves_the_supplied_human_answer(self) -> None:
         session_id = "sess_cli_limited_resume"
         manager = SessionManager(self.sessions)

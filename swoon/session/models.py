@@ -9,18 +9,28 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from swoon.aeml.models import PathRef, Result, ResultStatus, Root, Truncation
+from swoon.aeml.models import (
+    Action,
+    Argument,
+    Chunk,
+    PathRef,
+    Result,
+    ResultStatus,
+    Root,
+    Truncation,
+)
 
 from .errors import SessionError
 
 
-STATE_VERSION = 3
-SUPPORTED_STATE_VERSIONS = frozenset({1, 2, STATE_VERSION})
+STATE_VERSION = 4
+SUPPORTED_STATE_VERSIONS = frozenset({1, 2, 3, STATE_VERSION})
 SESSION_ID_PATTERN = re.compile(r"sess_[A-Za-z0-9_-]{1,64}\Z")
 ACTION_ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 TOOL_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{0,63}\Z")
 PROCESS_HANDLE_PATTERN = re.compile(r"proc_[A-Za-z0-9_-]{1,64}\Z")
 ACTION_DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+ARGUMENT_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}\Z")
 
 
 class SessionStatus(str, Enum):
@@ -75,6 +85,16 @@ class ProcessRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingConfirmation:
+    """One exact, validated action awaiting a real human decision."""
+
+    action: Action
+    reason: str
+    guard: str
+    requested_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class SessionState:
     session_id: str
     status: SessionStatus
@@ -89,6 +109,7 @@ class SessionState:
     chunks: tuple[ChunkRecord, ...] = ()
     processes: tuple[ProcessRecord, ...] = ()
     used_action_ids: tuple[str, ...] = ()
+    pending_confirmation: PendingConfirmation | None = None
 
     @property
     def step_limit_approaching(self) -> bool:
@@ -128,6 +149,11 @@ class SessionState:
             "used_action_ids": list(self.used_action_ids),
             "chunks": [_chunk_to_dict(item) for item in self.chunks],
             "processes": [_process_to_dict(item) for item in self.processes],
+            "pending_confirmation": (
+                None
+                if self.pending_confirmation is None
+                else _pending_confirmation_to_dict(self.pending_confirmation)
+            ),
         }
 
     @classmethod
@@ -157,6 +183,8 @@ class SessionState:
         }
         if version >= 3:
             expected_keys.add("used_action_ids")
+        if version >= 4:
+            expected_keys.add("pending_confirmation")
         if set(raw) != expected_keys:
             missing = sorted(expected_keys - set(raw))
             unknown = sorted(set(raw) - expected_keys)
@@ -214,6 +242,29 @@ class SessionState:
                 "Action ledger references an unreserved action ID",
             )
 
+        pending = (
+            _pending_confirmation_from_dict(raw["pending_confirmation"])
+            if version >= 4 and raw["pending_confirmation"] is not None
+            else None
+        )
+        if pending is not None:
+            pending_id = pending.action.id
+            if pending_id not in used_values:
+                raise SessionError(
+                    "invalid_session_state",
+                    "Pending confirmation references an unreserved action ID",
+                )
+            if pending_id in action_ids:
+                raise SessionError(
+                    "invalid_session_state",
+                    "Pending confirmation already has a persisted result",
+                )
+            if status is not SessionStatus.WAITING_USER:
+                raise SessionError(
+                    "invalid_session_state",
+                    "Pending confirmation requires waiting_user status",
+                )
+
         chunks = tuple(_chunk_from_dict(item) for item in _required_list(raw, "chunks"))
         chunk_keys = [(item.path.root, item.path.value) for item in chunks]
         if len(chunk_keys) != len(set(chunk_keys)):
@@ -243,6 +294,7 @@ class SessionState:
             used_action_ids=tuple(used_values),
             chunks=chunks,
             processes=processes,
+            pending_confirmation=pending,
         )
 
 
@@ -410,6 +462,149 @@ def _action_from_dict(raw: Any, *, version: int) -> ActionRecord:
         result=result,
         completed_at=_datetime(raw, "completed_at"),
         action_digest=action_digest,
+    )
+
+
+def _pending_confirmation_to_dict(record: PendingConfirmation) -> dict[str, Any]:
+    action = record.action
+    return {
+        "action": {
+            "id": action.id,
+            "tool": action.tool,
+            "path": (
+                None
+                if action.path is None
+                else {"root": action.path.root.value, "value": action.path.value}
+            ),
+            "arguments": [
+                {
+                    "name": argument.name,
+                    "value": argument.value,
+                    "attributes": [
+                        {"name": name, "value": value}
+                        for name, value in argument.attributes
+                    ],
+                }
+                for argument in action.arguments
+            ],
+            "chunk": (
+                None
+                if action.chunk is None
+                else {"seq": action.chunk.seq, "final": action.chunk.final}
+            ),
+            "expect_confirm": action.expect_confirm,
+        },
+        "reason": record.reason,
+        "guard": record.guard,
+        "requested_at": _timestamp(record.requested_at),
+    }
+
+
+def _pending_confirmation_from_dict(raw: Any) -> PendingConfirmation:
+    if not isinstance(raw, dict) or set(raw) != {
+        "action",
+        "reason",
+        "guard",
+        "requested_at",
+    }:
+        raise SessionError("invalid_session_state", "Invalid pending confirmation")
+    reason = _required_string(raw, "reason")
+    guard = _required_string(raw, "guard")
+    if not ACTION_DIGEST_PATTERN.fullmatch(guard):
+        raise SessionError("invalid_session_state", "Invalid pending confirmation guard")
+    action_raw = raw["action"]
+    if not isinstance(action_raw, dict) or set(action_raw) != {
+        "id",
+        "tool",
+        "path",
+        "arguments",
+        "chunk",
+        "expect_confirm",
+    }:
+        raise SessionError("invalid_session_state", "Invalid pending confirmation action")
+
+    action_id = _required_string(action_raw, "id")
+    tool = _required_string(action_raw, "tool")
+    if not ACTION_ID_PATTERN.fullmatch(action_id) or not TOOL_NAME_PATTERN.fullmatch(tool):
+        raise SessionError("invalid_session_state", "Invalid pending action ID or tool")
+
+    path = None
+    path_raw = action_raw["path"]
+    if path_raw is not None:
+        if not isinstance(path_raw, dict) or set(path_raw) != {"root", "value"}:
+            raise SessionError("invalid_session_state", "Invalid pending action path")
+        try:
+            root = Root(_required_string(path_raw, "root"))
+        except ValueError as error:
+            raise SessionError("invalid_session_state", "Invalid pending action root") from error
+        path = PathRef(_required_string(path_raw, "value"), root)
+
+    arguments_raw = _required_list(action_raw, "arguments")
+    arguments: list[Argument] = []
+    argument_names: set[str] = set()
+    for item in arguments_raw:
+        if not isinstance(item, dict) or set(item) != {"name", "value", "attributes"}:
+            raise SessionError("invalid_session_state", "Invalid pending action argument")
+        name = _required_string(item, "name")
+        value = item["value"]
+        if not ARGUMENT_NAME_PATTERN.fullmatch(name) or not isinstance(value, str):
+            raise SessionError("invalid_session_state", "Invalid pending action argument")
+        if name in argument_names:
+            raise SessionError("invalid_session_state", "Duplicate pending action argument")
+        argument_names.add(name)
+        attributes_raw = _required_list(item, "attributes")
+        attributes: list[tuple[str, str]] = []
+        attribute_names: set[str] = set()
+        for attribute in attributes_raw:
+            if not isinstance(attribute, dict) or set(attribute) != {"name", "value"}:
+                raise SessionError(
+                    "invalid_session_state",
+                    "Invalid pending action argument attribute",
+                )
+            attribute_name = _required_string(attribute, "name")
+            attribute_value = attribute["value"]
+            if (
+                not ARGUMENT_NAME_PATTERN.fullmatch(attribute_name)
+                or not isinstance(attribute_value, str)
+                or attribute_name in attribute_names
+            ):
+                raise SessionError(
+                    "invalid_session_state",
+                    "Invalid pending action argument attribute",
+                )
+            attribute_names.add(attribute_name)
+            attributes.append((attribute_name, attribute_value))
+        arguments.append(Argument(name, value, tuple(attributes)))
+
+    chunk = None
+    chunk_raw = action_raw["chunk"]
+    if chunk_raw is not None:
+        if not isinstance(chunk_raw, dict) or set(chunk_raw) != {"seq", "final"}:
+            raise SessionError("invalid_session_state", "Invalid pending action chunk")
+        seq = chunk_raw["seq"]
+        final = chunk_raw["final"]
+        if type(seq) is not int or seq < 1 or type(final) is not bool:
+            raise SessionError("invalid_session_state", "Invalid pending action chunk")
+        chunk = Chunk(seq, final)
+
+    expect_confirm = action_raw["expect_confirm"]
+    if expect_confirm is not True:
+        raise SessionError(
+            "invalid_session_state",
+            "A pending action must declare confirmation",
+        )
+    return PendingConfirmation(
+        action=Action(
+            id=action_id,
+            tool=tool,
+            path=path,
+            arguments=tuple(arguments),
+            chunk=chunk,
+            expect_confirm=True,
+        ),
+        reason=reason,
+        guard=guard,
+        requested_at=_datetime(raw, "requested_at"),
     )
 
 

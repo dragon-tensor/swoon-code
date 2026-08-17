@@ -1,4 +1,4 @@
-"""Shared settings for bounded read-only execution."""
+"""Shared settings for bounded tool execution."""
 
 from __future__ import annotations
 
@@ -54,3 +54,55 @@ class MutationToolLimits:
             raise ValueError("Mutation-tool limits must be positive integers")
         if self.max_content_bytes > self.max_file_bytes:
             raise ValueError("max_content_bytes cannot exceed max_file_bytes")
+
+
+@dataclass(frozen=True, slots=True)
+class CommandToolLimits:
+    """Hard bounds for disposable foreground command sandboxes."""
+
+    default_timeout_seconds: int = 30
+    managed_timeout_seconds: int = 120
+    max_capture_bytes: int = 8 * 1024 * 1024
+    max_result_bytes: int = 64 * 1024
+    default_output_lines: int = 1_000
+    max_command_bytes: int = 16 * 1024
+    max_argument_bytes: int = 8 * 1024
+    max_arguments: int = 256
+    max_snapshot_entries: int = 100_000
+    max_snapshot_bytes: int = 512 * 1024 * 1024
+    max_snapshot_file_bytes: int = 64 * 1024 * 1024
+    workspace_bytes: int = 512 * 1024 * 1024
+    temporary_bytes: int = 256 * 1024 * 1024
+    address_space_bytes: int = 2 * 1024 * 1024 * 1024
+    max_file_bytes: int = 256 * 1024 * 1024
+    max_processes: int = 256
+    max_open_files: int = 256
+
+    def __post_init__(self) -> None:
+        values = (
+            self.default_timeout_seconds,
+            self.managed_timeout_seconds,
+            self.max_capture_bytes,
+            self.max_result_bytes,
+            self.default_output_lines,
+            self.max_command_bytes,
+            self.max_argument_bytes,
+            self.max_arguments,
+            self.max_snapshot_entries,
+            self.max_snapshot_bytes,
+            self.max_snapshot_file_bytes,
+            self.workspace_bytes,
+            self.temporary_bytes,
+            self.address_space_bytes,
+            self.max_file_bytes,
+            self.max_processes,
+            self.max_open_files,
+        )
+        if any(type(value) is not int or value < 1 for value in values):
+            raise ValueError("Command-tool limits must be positive integers")
+        if self.max_result_bytes > self.max_capture_bytes:
+            raise ValueError("max_result_bytes cannot exceed max_capture_bytes")
+        if self.max_snapshot_file_bytes > self.max_snapshot_bytes:
+            raise ValueError("max_snapshot_file_bytes cannot exceed max_snapshot_bytes")
+        if self.max_file_bytes > self.workspace_bytes:
+            raise ValueError("max_file_bytes cannot exceed workspace_bytes")

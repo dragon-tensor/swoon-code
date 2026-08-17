@@ -239,6 +239,15 @@ in the first place; the reactive fallback catches what wasn't scoped.
   listings filter denied children as well.
 - `run-command` is not a shell escape hatch for these rules — path-shaped arguments inside a
   command string are checked against the same sandbox before execution.
+- In the Phase 12 foreground implementation, commands are split into a fixed argv and are never
+  passed to an interpreter-selected shell. Direct shell operators, traversal, cross-session
+  absolute paths, credential paths, and URL arguments fail before launch.
+- Foreground commands receive credential-filtered snapshots rather than the physical session
+  directories. Input is mounted read-only; output is copied into a size-limited tmpfs. All
+  command-side changes are discarded, so `run-command` cannot bypass overwrite/delete policy.
+- The foreground sandbox is offline: its environment is cleared and socket creation is denied by
+  inherited seccomp in addition to user/mount/PID/IPC/UTS isolation and resource limits. A host
+  without the required 64-bit Linux sandbox primitives fails closed.
 
 ### 6.1 Credentials
 The LLM never sees or supplies credentials. The interpreter injects them from local config at
@@ -537,7 +546,27 @@ Resolved by the output filesystem mutation implementation:
   returning for real-human approval. Approval survives process restart and fails closed if the
   target changed; denial leaves it untouched.
 
+Resolved by the foreground command implementation:
+
+- `run-command`, `run-build`, `run-tests`, and `run-linter` execute one foreground argv in a
+  bounded Bubblewrap sandbox; no interpreter-selected shell or unsandboxed fallback exists.
+- Both virtual roots are copied through the descriptor-relative policy boundary. Credential
+  entries are omitted, input stays read-only, and a bounded tmpfs working output is destroyed
+  after every run, regardless of exit status.
+- Host environment and credentials are cleared, socket creation is denied through inherited
+  seccomp, system paths are read-only, nested user namespaces are disabled, and CPU/wall time,
+  memory, file, process, descriptor, snapshot, tmpfs, and captured-output limits are enforced.
+- Exit zero/nonzero/timeout become structured, persisted results with bounded combined output.
+  Safety-capture overflow terminates the process and returns an error without persisting a
+  misleading partial completion.
+- Managed build/test/linter commands use fixed per-ecosystem argv templates. Omitted manager
+  detection must find exactly one ecosystem; target is one bounded argument, never command text.
+
 Remaining open items:
 
 - Whether background processes (`run-command-background`) need a heartbeat tag so the
   interpreter knows a dev server is still alive between turns.
+- How dependency installation should grant narrowly scoped network access, verify provenance,
+  and promote package state without exposing user credentials or package caches.
+- Whether a future reviewed-patch workflow should allow selected command-generated changes to be
+  promoted from the disposable workspace without bypassing destructive confirmation.

@@ -23,6 +23,7 @@ Implemented foundations:
 9. Bounded read-only orchestration, protocol repair, and human pauses
 10. Agent CLI with session create/resume and interactive lifecycle handling
 11. Output-only filesystem mutation with atomic file writes and resumable confirmation
+12. Offline foreground command, build, test, and linter sandboxing
 
 The currently executable AEML tools are:
 
@@ -39,10 +40,16 @@ The currently executable AEML tools are:
 - `edit-file`
 - `copy-file`
 - `copy-dir`
+- `run-command` (shell-free argv execution in a disposable sandbox)
+- `run-build`
+- `run-tests`
+- `run-linter`
 
-Writes are confined to the session output root; input stays read-only. Delete/move/chmod, Git
-mutations, package changes, builds/tests, and arbitrary commands remain disabled. The `swoon
-agent` command can drive these thirteen capabilities until completion, a human question,
+Writes are confined to the session output root; input stays read-only. Foreground execution is
+offline and runs against filtered disposable snapshots, so command-side filesystem changes never
+persist. Delete/move/chmod, Git mutations, package changes, background processes, and persistent
+environment changes remain disabled. The `swoon agent` command can drive these seventeen
+capabilities until completion, a human question,
 destructive confirmation, a step-limit pause, an explicit abort, or bounded protocol-repair
 exhaustion. The separate `swoon chat` command and legacy `chatgpt.sh` wrapper remain direct
 chatbot relays.
@@ -54,6 +61,10 @@ python3 -m venv .venv
 .venv/bin/pip install -e .
 .venv/bin/python -m playwright install chromium
 ```
+
+Foreground command tools additionally require compatible `bwrap` and `prlimit` executables on
+64-bit Linux (x86-64 or AArch64). They fail closed rather than falling back to unsandboxed
+execution when those primitives are unavailable.
 
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
 Cookie-Editor list and a Playwright storage-state object are accepted.
@@ -103,8 +114,10 @@ with `--approve-pending` or `--deny-pending`. Neither flag approves future actio
   --non-interactive
 ```
 
-The agent can copy and modify output files, but it still cannot delete files, run tests, install
-packages, mutate Git, or execute arbitrary commands.
+The agent can copy and modify output files and can run offline foreground verification commands.
+Command workspaces are disposable: builds, formatter edits, and other command-side changes are
+discarded. It still cannot delete persistent files, install packages, mutate Git, start background
+processes, or access the network.
 
 ## Browser relay
 
@@ -189,8 +202,9 @@ If a step limit is reached, only a later human-side call with `additional_steps=
 it. See the orchestration guide for pause/resume examples and exact failure semantics.
 
 The `swoon agent` command instead opts into `AgentToolDispatcher` and `AgentOrchestrator`, using
-one capability-derived prompt/validator allowlist for the seven reads and six filesystem
-mutations. See the filesystem-mutation guide for the embedding API and confirmation flow.
+one capability-derived prompt/validator allowlist for the seven reads, six filesystem mutations,
+and four disposable foreground execution tools. See the filesystem-mutation and foreground-command
+guides for the embedding API and safety boundaries.
 
 ## Documentation
 
@@ -202,6 +216,7 @@ mutations. See the filesystem-mutation guide for the embedding API and confirmat
 - `docs/read-only-orchestration.md` — Phase 9 autonomous read-only loop
 - `docs/agent-cli.md` — Phase 10 command-line lifecycle and exit codes
 - `docs/filesystem-mutations.md` — Phase 11 write boundary and confirmation lifecycle
+- `docs/foreground-commands.md` — Phase 12 offline foreground execution boundary
 - `MIGRATION.md` — original relay history
 
 ## Tests

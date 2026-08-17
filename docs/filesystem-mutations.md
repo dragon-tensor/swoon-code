@@ -11,8 +11,9 @@ read-only tools plus six filesystem mutations:
 - `copy-dir`
 
 All destinations are under the current session's output root. Input remains read-only, and
-delete, move, rename, chmod, commands, package changes, builds, tests, and Git mutations remain
-disabled.
+delete, move, rename, chmod, package changes, and Git mutations remain disabled. Phase 12 adds
+command/build/test/linter execution through a separate disposable sandbox; those commands cannot
+persist filesystem changes or bypass these mutation rules.
 
 ## Operation semantics
 

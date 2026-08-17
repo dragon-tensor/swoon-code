@@ -45,4 +45,5 @@ tools and Phase 11 mutations additionally use descriptor-relative no-follow prim
 verify opened entries. Raw LLM paths are never passed directly to file or shell operations.
 
 The path policy itself only authorizes. Separate tool layers perform reads and the six enabled
-output mutations; delete and execution remain disabled.
+output mutations. Phase 12 foreground execution uses the same policy while building filtered
+snapshots, then runs only in a disposable OS sandbox; persistent delete remains disabled.

@@ -3,8 +3,15 @@
 Phase 10 exposed the bounded engine as `swoon agent` while preserving the original raw relay as
 `swoon chat`. Phase 11 keeps that lifecycle and adds six output-only filesystem mutations:
 `create-file`, `overwrite-file`, `append-file`, `edit-file`, `copy-file`, and `copy-dir`, in
-addition to the seven read tools. Arbitrary commands and all other mutating schemas remain
-disabled.
+addition to the seven read tools. Phase 12 adds four offline foreground tools: `run-command`,
+`run-build`, `run-tests`, and `run-linter`. Their filesystems are disposable, so only explicit
+filesystem tools persist output changes. Background commands, package operations, Git mutations,
+and the remaining mutating schemas stay disabled.
+
+On supported 64-bit Linux hosts, foreground execution requires `bwrap`, `prlimit`, and a system
+`python3`. Missing sandbox primitives return a tool error to the agent; the CLI never falls back
+to running a command directly on the host. See `foreground-commands.md` for exact isolation and
+result semantics.
 
 ## Create a session
 

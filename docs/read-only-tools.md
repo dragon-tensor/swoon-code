@@ -53,8 +53,9 @@ Status and diff paths are checked against the path policy again. Diff content is
 for the resulting safe path list. Git log exposes hash, timestamp, author name, and subject, but
 not author email.
 
-This fixed Git subprocess is narrower than AEML's future `run-command` capability. General
-commands remain disabled and will require a separate OS sandbox phase.
+This fixed Git subprocess remains narrower than Phase 12's separate `run-command` capability.
+`ReadOnlyToolDispatcher` still rejects general commands; only `AgentToolDispatcher` opts into the
+offline disposable OS sandbox described in `foreground-commands.md`.
 
 ## Dependency inspection
 

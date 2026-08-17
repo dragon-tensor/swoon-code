@@ -563,7 +563,7 @@ class ReadOnlyOrchestrator(AEMLOrchestrator):
 
 
 class AgentOrchestrator(AEMLOrchestrator):
-    """Bounded agent loop with reads and output-only filesystem mutation."""
+    """Bounded agent loop with reads, output mutations, and sandboxed verification."""
 
     def __init__(
         self,

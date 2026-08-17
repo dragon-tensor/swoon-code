@@ -34,9 +34,9 @@ The source project is copied into the session input directory. Symbolic links, h
 special files, excessive file counts, and excessive byte counts are rejected. Input files are
 sealed with owner-read-only permissions; executable files retain owner execute permission.
 
-These permissions are tamper evidence and defense in depth. The later command-execution phase
-must additionally mount input read-only in its OS sandbox because a process running as the file
-owner could otherwise change permission bits.
+These permissions are tamper evidence and defense in depth. Phase 12 additionally copies a
+credential-filtered input snapshot and mounts it read-only in the command sandbox, because a
+process running as the file owner could otherwise change permission bits.
 
 ## Persisted state
 

@@ -1,4 +1,4 @@
-"""Allowlisted dispatchers for read-only and output-mutation capabilities."""
+"""Allowlisted dispatchers for read, output mutation, and sandbox capabilities."""
 
 from __future__ import annotations
 
@@ -27,10 +27,11 @@ from swoon.policy import PathPolicy, PathPolicyError
 from swoon.session import Session, SessionError, SessionManager, SessionStatus
 
 from .dependencies import DependencyReadTools
+from .commands import ForegroundCommandTools
 from .errors import ToolExecutionError
 from .filesystem import FilesystemReadTools
 from .git import GitReadTools
-from .models import MutationToolLimits, ReadToolLimits
+from .models import CommandToolLimits, MutationToolLimits, ReadToolLimits
 from .mutations import FilesystemMutationTools
 
 
@@ -56,7 +57,17 @@ IMPLEMENTED_MUTATION_TOOLS = frozenset(
         "copy-dir",
     }
 )
-IMPLEMENTED_AGENT_TOOLS = IMPLEMENTED_READ_TOOLS | IMPLEMENTED_MUTATION_TOOLS
+IMPLEMENTED_EXECUTION_TOOLS = frozenset(
+    {
+        "run-command",
+        "run-build",
+        "run-tests",
+        "run-linter",
+    }
+)
+IMPLEMENTED_AGENT_TOOLS = (
+    IMPLEMENTED_READ_TOOLS | IMPLEMENTED_MUTATION_TOOLS | IMPLEMENTED_EXECUTION_TOOLS
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +417,8 @@ class ReadOnlyToolDispatcher:
             return None
         if action.spec.name in {"git-diff", "list-dependencies"}:
             return f"{action.spec.name} is blocked by an unfinished output write"
+        if action.spec.name in IMPLEMENTED_EXECUTION_TOOLS:
+            return f"{action.spec.name} is blocked by an unfinished output write"
         if action.spec.name in {"create-file", "overwrite-file", "edit-file"}:
             path = action.source.path
             if path is not None and path in pending:
@@ -498,10 +511,12 @@ class ReadOnlyToolDispatcher:
 
 
 class AgentToolDispatcher(ReadOnlyToolDispatcher):
-    """Execute the read tools plus six bounded, output-only filesystem mutations."""
+    """Execute reads, output mutations, and disposable foreground commands."""
 
     implemented_tools = IMPLEMENTED_AGENT_TOOLS
-    allowed_effects = frozenset({ToolEffect.READ_ONLY, ToolEffect.MUTATING})
+    allowed_effects = frozenset(
+        {ToolEffect.READ_ONLY, ToolEffect.MUTATING, ToolEffect.EXECUTING}
+    )
 
     def __init__(
         self,
@@ -509,10 +524,18 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
         *,
         limits: ReadToolLimits | None = None,
         mutation_limits: MutationToolLimits | None = None,
+        command_limits: CommandToolLimits | None = None,
         git_binary: str | Path | None = None,
+        sandbox_binary: str | Path | None = None,
+        resource_limiter_binary: str | Path | None = None,
+        sandbox_python_binary: str | Path | None = None,
     ) -> None:
         super().__init__(session_manager, limits=limits, git_binary=git_binary)
         self.mutation_limits = mutation_limits or MutationToolLimits()
+        self.command_limits = command_limits or CommandToolLimits()
+        self.sandbox_binary = sandbox_binary
+        self.resource_limiter_binary = resource_limiter_binary
+        self.sandbox_python_binary = sandbox_python_binary
 
     def _handler(
         self,
@@ -533,6 +556,20 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
                 "edit-file": filesystem.edit_file,
                 "copy-file": filesystem.copy_file,
                 "copy-dir": filesystem.copy_directory,
+            }[action.spec.name]
+        if action.spec.name in IMPLEMENTED_EXECUTION_TOOLS:
+            commands = ForegroundCommandTools(
+                policy,
+                self.command_limits,
+                sandbox_binary=self.sandbox_binary,
+                resource_limiter_binary=self.resource_limiter_binary,
+                python_binary=self.sandbox_python_binary,
+            )
+            return {
+                "run-command": commands.run_command,
+                "run-build": commands.run_build,
+                "run-tests": commands.run_tests,
+                "run-linter": commands.run_linter,
             }[action.spec.name]
         return super()._handler(action, policy, confirmed=confirmed)
 

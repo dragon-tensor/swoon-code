@@ -224,13 +224,19 @@ _SPECS = (
     ),
     ToolSpec(
         "install-dependency",
-        ToolEffect.EXECUTING,
-        (enum_arg("manager", PACKAGE_MANAGERS, required=True), text_arg("package"), bool_arg("dev")),
+        ToolEffect.MUTATING,
+        (
+            enum_arg("manager", PACKAGE_MANAGERS, required=True),
+            text_arg("package", required=True),
+            bool_arg("dev"),
+        ),
+        confirmation=Confirmation.ALWAYS,
     ),
     ToolSpec(
         "remove-dependency",
-        ToolEffect.EXECUTING,
+        ToolEffect.MUTATING,
         (enum_arg("manager", PACKAGE_MANAGERS, required=True), text_arg("package", required=True)),
+        confirmation=Confirmation.ALWAYS,
     ),
     ToolSpec("list-dependencies", ToolEffect.READ_ONLY, (MANAGER,)),
     ToolSpec("git-init", ToolEffect.MUTATING),

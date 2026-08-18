@@ -117,8 +117,9 @@ This Phase 9 compatibility API remains intentionally read-only. Phase 11 adds a 
 `AgentOrchestrator`/`AgentToolDispatcher` opt-in for output filesystem mutations. Phase 12 adds
 four offline foreground verification tools, Phase 13 adds three supervised background tools, and
 Phase 14 expands the broader dispatcher to eleven filesystem mutations with guarded deletion and
-atomic relocation. Package installation, networked services, and Git writes still require later
-sandbox phases.
+atomic relocation. Phase 16 adds two confirmed, exact dependency declaration mutations, without
+downloading artifacts or executing package scripts. Package artifact installation, networked
+services, and Git writes still require later sandbox phases.
 
 Phase 10 exposes this API through `swoon agent`, including session creation/resume, terminal
 answers, explicit step approval, and deterministic exit codes. See `agent-cli.md`.

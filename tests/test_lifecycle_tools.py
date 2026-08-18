@@ -78,7 +78,7 @@ class LifecycleToolTests(unittest.TestCase):
         expected = {"delete-file", "delete-dir", "move", "rename", "chmod"}
         self.assertTrue(expected.issubset(IMPLEMENTED_MUTATION_TOOLS))
         self.assertTrue(expected.issubset(self.dispatcher.tool_specs))
-        self.assertEqual(len(self.dispatcher.tool_specs), 25)
+        self.assertEqual(len(self.dispatcher.tool_specs), 27)
 
     def test_delete_file_requires_host_confirmation_and_persists_success(self) -> None:
         target = self.output / "obsolete.txt"

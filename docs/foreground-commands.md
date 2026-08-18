@@ -10,7 +10,8 @@ Phase 12 adds four executing capabilities to `AgentToolDispatcher`:
 They are foreground verification tools. Every invocation blocks until the command exits, reaches
 its hard timeout, or exceeds its capture bound. Phase 13 reuses this exact offline disposable
 sandbox for supervised background work. Environment mutation, package installation/removal,
-network access, and Git execution remain disabled.
+network access, and Git execution remain disabled inside command sandboxes. Phase 16's separate
+dependency tools only mutate exact declarations; they do not put package artifacts in this sandbox.
 
 ## Disposable execution model
 

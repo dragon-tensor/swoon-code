@@ -355,7 +355,7 @@ Turn 1 (LLM → interpreter)
     1. Confirm output/ is empty
     2. Create app.py
     3. Create requirements.txt
-    4. Install deps, smoke-test
+    4. Declare an exact dependency, syntax-check
   </plan>
   <action id="a1"><tool>list-dir</tool><path root="output">.</path></action>
   <next>await_result</next>
@@ -379,14 +379,17 @@ in one message — no reason to split a two-line file).
 
 Turn 5 (LLM → interpreter)
 <aeml turn="5" session="sess_9f2">
-  <action id="a5"><tool>install-dependency</tool><args><manager>pip</manager></args></action>
+  <action id="a5"><tool>install-dependency</tool>
+    <args><manager>pip</manager><package>Flask==3.1.0</package></args>
+    <expect_confirm>true</expect_confirm>
+  </action>
   <next>await_result</next>
 </aeml>
 
 Turn 6 (LLM → interpreter)
 <aeml turn="6" session="sess_9f2">
   <action id="a6"><tool>run-command</tool>
-    <args><cmd>python app.py --check</cmd><timeout>10</timeout><max_output_lines>50</max_output_lines></args>
+    <args><cmd>python -m compileall app.py</cmd><timeout>10</timeout><max_output_lines>50</max_output_lines></args>
   </action>
   <next>await_result</next>
 </aeml>
@@ -603,13 +606,24 @@ Resolved by the consumer release implementation:
 - A network-disabled smoke runner installs that wheel into a fresh virtual environment and tests
   the installed entry point rather than importing the source checkout.
 
+Resolved by the guarded dependency declaration implementation:
+
+- `install-dependency` and `remove-dependency` require one package plus a supported manager,
+  mutate one recognized output manifest atomically, and always pause for real-human confirmation.
+- Additions require exact registry versions. URLs, paths, version ranges, floating tags, inherited
+  credentials, network access, and package script execution are outside the capability.
+- A related lockfile causes a fail-closed `lockfile_present` result rather than an inconsistent
+  manifest/lock pair. Approval is guarded by the manifest identity, metadata, size, and SHA-256.
+- Results explicitly report `package_artifacts=not_installed`; the historical tool name does not
+  imply that Phase 16 has downloaded or promoted executable third-party code.
+
 Remaining open items:
 
 - Whether a future network-service capability should retain and join a dedicated isolated network
   namespace so a dev server can be tested without exposing host networking. Phase 13 remains
   socket-denied and does not claim dev-server support.
-- How dependency installation should grant narrowly scoped network access, verify provenance,
-  and promote package state without exposing user credentials or package caches.
+- How package artifact acquisition should grant narrowly scoped network access, verify provenance,
+  refresh locks, and promote package state without exposing user credentials or package caches.
 - How Git mutations should isolate hooks, configuration, credentials, and destructive history
   changes while preserving exact-action confirmation.
 - Whether a future reviewed-patch workflow should allow selected command-generated changes to be

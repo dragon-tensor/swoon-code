@@ -9,6 +9,8 @@ filesystem tools persist output changes. Phase 13 adds `run-command-background`,
 and `kill-process` with the same disposable, offline boundary. Package operations, Git mutations,
 and networked services stay disabled. Phase 14 adds persistent `delete-file`, `delete-dir`,
 `move`, `rename`, and restricted `chmod`; deletion reuses the exact-action decision flow below.
+Phase 16 adds guarded `install-dependency` and `remove-dependency` declaration changes. Despite
+their protocol names, they do not download artifacts, execute package managers, or refresh locks.
 
 On supported 64-bit Linux hosts, foreground execution requires `bwrap`, `prlimit`, and a system
 `python3`. Missing sandbox primitives return a tool error to the agent; the CLI never falls back
@@ -70,9 +72,9 @@ budget.
 
 ## Destructive confirmation
 
-An `overwrite-file` action targeting a non-empty file, and every `delete-file` or `delete-dir`,
-pauses independently of `<ask_user>` and the step limit. The exact action and target guard are
-persisted before the CLI asks:
+An `overwrite-file` action targeting a non-empty file, every `delete-file` or `delete-dir`, and
+every dependency declaration change pauses independently of `<ask_user>` and the step limit. The
+exact action and target guard are persisted before the CLI asks:
 
 ```text
 Pending overwrite-file action 'overwrite1': ...

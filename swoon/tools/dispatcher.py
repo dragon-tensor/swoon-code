@@ -34,8 +34,9 @@ from swoon.session import (
 from swoon.session.models import PROCESS_HANDLE_PATTERN
 
 from .background import BackgroundProcessTools
-from .dependencies import DependencyReadTools
 from .commands import ForegroundCommandTools
+from .dependencies import DependencyReadTools
+from .dependency_mutations import DependencyMutationTools
 from .errors import ToolExecutionError
 from .filesystem import FilesystemReadTools
 from .git import GitReadTools
@@ -86,11 +87,18 @@ IMPLEMENTED_BACKGROUND_TOOLS = frozenset(
         "stream-output",
     }
 )
+IMPLEMENTED_DEPENDENCY_TOOLS = frozenset(
+    {
+        "install-dependency",
+        "remove-dependency",
+    }
+)
 IMPLEMENTED_AGENT_TOOLS = (
     IMPLEMENTED_READ_TOOLS
     | IMPLEMENTED_MUTATION_TOOLS
     | IMPLEMENTED_EXECUTION_TOOLS
     | IMPLEMENTED_BACKGROUND_TOOLS
+    | IMPLEMENTED_DEPENDENCY_TOOLS
 )
 
 
@@ -471,7 +479,12 @@ class ReadOnlyToolDispatcher:
                 if path_parts[: len(scope_parts)] == scope_parts:
                     return "grep scope contains an unfinished chunk sequence"
             return None
-        if action.spec.name in {"git-diff", "list-dependencies"}:
+        if action.spec.name in {
+            "git-diff",
+            "list-dependencies",
+            "install-dependency",
+            "remove-dependency",
+        }:
             return f"{action.spec.name} is blocked by an unfinished output write"
         if (
             action.spec.name in IMPLEMENTED_EXECUTION_TOOLS
@@ -665,7 +678,7 @@ class ReadOnlyToolDispatcher:
 
 
 class AgentToolDispatcher(ReadOnlyToolDispatcher):
-    """Execute reads, output mutations, and disposable sandboxed commands."""
+    """Execute reads, guarded mutations, and disposable sandboxed commands."""
 
     implemented_tools = IMPLEMENTED_AGENT_TOOLS
     allowed_effects = frozenset(
@@ -699,6 +712,16 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
         session: Session,
         confirmed: bool,
     ):
+        if action.spec.name in IMPLEMENTED_DEPENDENCY_TOOLS:
+            dependencies = DependencyMutationTools(
+                policy,
+                self.limits,
+                self.mutation_limits,
+            )
+            return {
+                "install-dependency": dependencies.install_dependency,
+                "remove-dependency": dependencies.remove_dependency,
+            }[action.spec.name]
         if action.spec.name in IMPLEMENTED_MUTATION_TOOLS:
             filesystem = FilesystemMutationTools(policy, self.mutation_limits)
             lifecycle = FilesystemLifecycleTools(policy, self.mutation_limits)
@@ -863,7 +886,14 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
         action: ValidatedAction,
         session: Session,
     ) -> ConfirmationRequest | ProtocolError | None:
-        if action.spec.name not in {"overwrite-file", "delete-file", "delete-dir"}:
+        guarded = {
+            "overwrite-file",
+            "delete-file",
+            "delete-dir",
+            "install-dependency",
+            "remove-dependency",
+        }
+        if action.spec.name not in guarded:
             return None
         try:
             policy = PathPolicy(session.paths)
@@ -872,9 +902,15 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
                     policy,
                     self.mutation_limits,
                 ).overwrite_confirmation_details(action)
-            else:
+            elif action.spec.name in {"delete-file", "delete-dir"}:
                 reason, guard = FilesystemLifecycleTools(
                     policy,
+                    self.mutation_limits,
+                ).confirmation_details(action)
+            else:
+                reason, guard = DependencyMutationTools(
+                    policy,
+                    self.limits,
                     self.mutation_limits,
                 ).confirmation_details(action)
         except (PathPolicyError, ToolExecutionError) as error:
@@ -888,6 +924,6 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
         return ConfirmationRequest(
             action.source.id,
             action.spec.name,
-            reason or "overwrite-file target snapshot requires revalidation",
+            reason or f"{action.spec.name} target snapshot requires revalidation",
             guard,
         )

@@ -13,6 +13,7 @@ from swoon.aeml.models import PathRef, ProtocolError, Result, ResultStatus, Root
 from swoon.session import SessionManager
 from swoon.tools import (
     IMPLEMENTED_BACKGROUND_TOOLS,
+    IMPLEMENTED_DEPENDENCY_TOOLS,
     IMPLEMENTED_EXECUTION_TOOLS,
     AgentToolDispatcher,
     CommandToolLimits,
@@ -98,19 +99,23 @@ class ForegroundCommandToolTests(unittest.TestCase):
         )
         for name in IMPLEMENTED_BACKGROUND_TOOLS:
             self.assertIn(name, self.dispatcher.tool_specs)
-        for name in (
-            "install-dependency",
-            "remove-dependency",
-            "set-env",
-        ):
+        self.assertEqual(
+            IMPLEMENTED_DEPENDENCY_TOOLS,
+            {"install-dependency", "remove-dependency"},
+        )
+        for name in IMPLEMENTED_DEPENDENCY_TOOLS:
+            self.assertIn(name, self.dispatcher.tool_specs)
+        for name in ("set-env",):
             self.assertNotIn(name, self.dispatcher.tool_specs)
         prompt = AEMLPromptBuilder(self.dispatcher.tool_specs).initial(
             AEMLContextBuilder().build(self.session, turn=1, user_prompt="Verify output")
         )
-        self.assertIn('<available_tools count="25">', prompt)
+        self.assertIn('<available_tools count="27">', prompt)
         self.assertIn('name="run-command" effect="executing"', prompt)
         self.assertIn('name="run-command-background" effect="executing"', prompt)
         self.assertIn('name="stream-output" effect="read_only"', prompt)
+        self.assertIn('name="install-dependency" effect="mutating"', prompt)
+        self.assertIn('confirmation="always"', prompt)
         self.assertIn("filesystem changes are discarded", prompt.lower())
         self.assertIn("opaque handle", prompt.lower())
         self.assertIn('name="delete-file" effect="mutating"', prompt)

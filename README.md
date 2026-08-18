@@ -27,6 +27,7 @@ Implemented foundations:
 13. Supervised background commands with bounded streaming and handle-scoped termination
 14. Guarded output deletion, atomic relocation, and owner-private mode changes
 15. Offline wheel packaging, installed-entrypoint smoke testing, and consumer diagnostics
+16. Confirmed exact dependency declaration changes with atomic manifests and lockfile refusal
 
 The currently executable AEML tools are:
 
@@ -55,17 +56,20 @@ The currently executable AEML tools are:
 - `move` (atomic output-only relocation to a missing destination)
 - `rename` (atomic same-parent rename to a missing destination)
 - `chmod` (regular files; owner-private `0600` or `0700` only)
+- `install-dependency` (adds one exact registry declaration; never downloads package code)
+- `remove-dependency` (removes one declaration; never invokes a package manager)
 
 Writes are confined to the session output root; input stays read-only. Foreground and background
 execution are offline and run against filtered disposable snapshots, so command-side filesystem
 changes never persist. Background work is addressed only by an opaque session handle; it cannot
 survive interpreter shutdown. Persistent deletion and relocation stay inside output and pass the
 same no-follow policy boundary; deletion is guarded by a separate human decision. Git mutations,
-package changes, networked services, and persistent environment changes remain disabled. The
-`swoon agent` command can drive these twenty-five capabilities until completion, a human question,
-destructive confirmation, a step-limit pause, an explicit abort, or bounded protocol-repair
-exhaustion. The separate `swoon chat` command and legacy `chatgpt.sh` wrapper remain direct
-chatbot relays.
+package downloads, networked services, and persistent environment changes remain disabled.
+Dependency tools can make one exact, human-confirmed manifest change only when no related lockfile
+would become stale. The `swoon agent` command can drive these twenty-seven capabilities until
+completion, a human question, guarded confirmation, a step-limit pause, an explicit abort, or
+bounded protocol-repair exhaustion. The separate `swoon chat` command and legacy `chatgpt.sh`
+wrapper remain direct chatbot relays.
 
 ## Setup
 
@@ -139,8 +143,9 @@ exhausted session can be resumed with explicit approval:
   --non-interactive
 ```
 
-If a non-empty overwrite or deletion is waiting for destructive approval, resume the exact stored
-action with `--approve-pending` or `--deny-pending`. Neither flag approves future actions:
+If a non-empty overwrite, deletion, or dependency declaration is waiting for guarded approval,
+resume the exact stored action with `--approve-pending` or `--deny-pending`. Neither flag approves
+future actions:
 
 ```bash
 .venv/bin/swoon agent \
@@ -153,8 +158,9 @@ action with `--approve-pending` or `--deny-pending`. Neither flag approves futur
 The agent can copy, modify, move, rename, chmod, and—after a real-human decision—delete output
 files, run offline foreground verification, and supervise bounded offline background jobs.
 Command workspaces are disposable: builds, formatter edits, and other command-side changes are
-discarded. It still cannot install packages, mutate Git, expose a network service, or access the
-network.
+discarded. It can add or remove confirmed exact dependency declarations, but it still cannot
+download package artifacts, refresh lockfiles, mutate Git, expose a network service, or access
+the network.
 
 ## Browser relay
 
@@ -258,6 +264,7 @@ and safety boundaries.
 - `docs/background-commands.md` — Phase 13 supervised background lifecycle
 - `docs/filesystem-lifecycle.md` — Phase 14 guarded delete/move/rename/chmod boundary
 - `docs/consumer-testing.md` — Phase 15 wheel build, installation, doctor, and acceptance flow
+- `docs/dependency-changes.md` — Phase 16 exact declaration and lockfile safety boundary
 - `MIGRATION.md` — original relay history
 
 ## Tests

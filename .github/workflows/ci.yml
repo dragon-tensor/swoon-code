@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  unit:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/aeml_eval.py
+
+  portable:
+    name: Portable CLI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-15]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/aeml_eval.py
+
+  sandbox:
+    name: Linux sandbox primitives
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: sudo apt-get update
+      - run: sudo apt-get install --yes bubblewrap util-linux
+      - run: python -m unittest tests.test_command_tools tests.test_background_tools -v
+
+  arm64:
+    name: Linux ARM64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          architecture: arm64
+      - run: sudo apt-get update
+      - run: sudo apt-get install --yes bubblewrap util-linux
+      - run: python -m unittest discover -s tests -v
+      - run: python scripts/aeml_eval.py
+
+  browser:
+    name: Chromium launch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python -m pip install "playwright>=1.50,<2"
+      - run: python -m playwright install --with-deps chromium
+      - run: python scripts/build_wheel.py --out-dir dist
+      - run: python -m pip install --no-deps dist/swoon_code-*-py3-none-any.whl
+      - run: swoon doctor --launch-browser
+
+  release-candidate:
+    name: Release candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - run: python scripts/release.py --out-dir dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: swoon-release-candidate
+          path: dist/
+          if-no-files-found: error

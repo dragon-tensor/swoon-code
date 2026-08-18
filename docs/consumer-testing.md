@@ -1,9 +1,9 @@
 # Consumer build and test
 
-Phase 15 makes the current Python application directly testable as a consumer CLI. The release
-artifact is a platform-independent wheel, not a bundled Chromium executable. This keeps the
-security-sensitive browser installation visible and updateable while still providing a normal
-`swoon` command.
+Phases 15 and 21 make the Python application directly testable as a consumer CLI and as both wheel
+and source release artifacts. Chromium remains a separate platform runtime. This keeps its
+security-sensitive installation visible and updateable while still providing a normal `swoon`
+command.
 
 ## Fastest source-tree check
 
@@ -68,8 +68,32 @@ python3 scripts/smoke_wheel.py dist/swoon_code-0.1.0-py3-none-any.whl
 
 The smoke runner creates a fresh temporary virtual environment, installs the wheel with
 `--no-index --no-deps`, then verifies the installed `swoon --version`, root help, doctor help, and
-package import. This specifically tests the built artifact and generated console entry point—not
-the source checkout.
+package import. It also exercises session list/show/export/delete through the installed entry point.
+This specifically tests the built artifact—not the source checkout.
+
+## Build the source distribution
+
+Build the deterministic PAX source archive and test it independently:
+
+```bash
+python3 scripts/build_sdist.py
+python3 scripts/smoke_sdist.py dist/swoon_code-0.1.0.tar.gz
+```
+
+The smoke runner bounds and validates every archive member, refuses links and special files,
+extracts with Python's safe data filter, rebuilds a wheel from the extracted tree, and passes that
+wheel through the installed consumer smoke. Repeated source and wheel builds must be byte-identical.
+
+For a complete release rehearsal from a clean Git worktree, use an empty destination:
+
+```bash
+python3 scripts/release.py --out-dir /tmp/swoon-release
+```
+
+The release directory contains a wheel, source archive, direct-dependency SPDX 2.3 JSON document,
+`release-manifest.json`, and `SHA256SUMS`. The manifest binds artifact hashes to the Git commit and
+records whether a development-only `--allow-dirty` override was used. Do not distribute dirty
+rehearsal output. See [`release-checklist.md`](release-checklist.md).
 
 ## Install like a consumer
 
@@ -124,13 +148,14 @@ retention cleanup with `swoon session delete sess_EXAMPLE` and its exact confirm
 
 ## Release boundary
 
-The wheel is sufficient for local consumer testing and private distribution. A true single-file
-executable is intentionally deferred: Chromium is a large external runtime with its own updates,
-sandbox requirements, and platform-specific files. A later release phase can provide an installer
-or application bundle that manages Python and Chromium together without pretending they are one
-small binary.
+The wheel is the normal Python consumer artifact; the source archive supports downstream rebuilds.
+A true single-file executable is not provided: Chromium is a large external runtime with its own
+updates, sandbox requirements, platform-specific files, licenses, and notices. A future installer
+could manage Python and Chromium together, but must not present them as one small self-contained
+binary.
 
 The source and wheel are distributed under Apache-2.0. `RESPONSIBLE_USE.md` documents educational
-intent, non-affiliation, and user responsibility without changing the software license. Before a
-public release, review third-party dependency notices and confirm that the collective
-`Swoon Code contributors` attribution in `NOTICE` matches the ownership policy you want to use.
+intent, non-affiliation, and user responsibility without changing the software license.
+`THIRD_PARTY_NOTICES.md` records the unbundled dependency/runtime boundary. Before publication,
+confirm that the collective `Swoon Code contributors` attribution in `NOTICE` matches the ownership
+policy you intend to use.

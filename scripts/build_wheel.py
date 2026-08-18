@@ -186,6 +186,44 @@ def _metadata(
         f"License-Expression: {license_expression}",
         "Description-Content-Type: text/markdown",
     ]
+    authors = project.get("authors", [])
+    if not isinstance(authors, list) or not authors:
+        raise ValueError("project authors must be a non-empty array")
+    author_names: list[str] = []
+    for author in authors:
+        if not isinstance(author, dict) or set(author) != {"name"}:
+            raise ValueError("offline builder requires authors with a name only")
+        author_names.append(_required_text(author, "name"))
+    lines.append(f"Author: {', '.join(author_names)}")
+
+    keywords = project.get("keywords", [])
+    if not isinstance(keywords, list) or not keywords:
+        raise ValueError("project keywords must be a non-empty array")
+    normalized_keywords: list[str] = []
+    for keyword in keywords:
+        if not isinstance(keyword, str):
+            raise ValueError("project keywords must contain text")
+        normalized_keywords.append(_single_line(keyword, "project keyword"))
+    lines.append(f"Keywords: {','.join(normalized_keywords)}")
+
+    classifiers = project.get("classifiers", [])
+    if not isinstance(classifiers, list) or not classifiers:
+        raise ValueError("project classifiers must be a non-empty array")
+    for classifier in classifiers:
+        if not isinstance(classifier, str):
+            raise ValueError("project classifiers must contain text")
+        lines.append(f"Classifier: {_single_line(classifier, 'project classifier')}")
+
+    urls = project.get("urls", {})
+    if not isinstance(urls, dict) or not urls:
+        raise ValueError("project URLs must be a non-empty table")
+    for label, url in sorted(urls.items()):
+        if not isinstance(label, str) or not isinstance(url, str):
+            raise ValueError("project URLs must map text labels to text URLs")
+        lines.append(
+            f"Project-URL: {_single_line(label, 'project URL label')}, "
+            f"{_single_line(url, 'project URL')}"
+        )
     lines.extend(f"License-File: {name}" for name in license_files)
     lines.extend(f"Requires-Dist: {dependency}" for dependency in dependencies)
     return ("\n".join(lines) + "\n\n" + readme).encode("utf-8")
@@ -257,6 +295,13 @@ def _required_text(mapping: dict[str, Any], name: str) -> str:
     ):
         raise ValueError(f"project {name!r} must be one non-empty line")
     return value.strip()
+
+
+def _single_line(value: str, label: str) -> str:
+    selected = value.strip()
+    if not selected or "\n" in selected or "\r" in selected:
+        raise ValueError(f"{label} must be one non-empty line")
+    return selected
 
 
 def _normalize_distribution(name: str) -> str:

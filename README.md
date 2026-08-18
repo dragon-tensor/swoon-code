@@ -17,6 +17,10 @@ access controls, or evade provider restrictions. Educational intent does not ove
 terms. Read [Responsible use and project status](RESPONSIBLE_USE.md) before using the browser
 transport, and treat exported browser cookies as account credentials.
 
+Version 0.1 is an alpha release candidate. Its automated gates are offline; a build is not
+live-verified until a release owner separately completes the authorized live check on the target
+host.
+
 ## Current status
 
 Implemented foundations:
@@ -41,6 +45,7 @@ Implemented foundations:
 18. Owner-private browser credentials, opt-in debug artifacts, and an explicit supported scope
 19. Human-side session listing, output export, guarded cleanup, and consumer retention guidance
 20. Adversarial AEML corpus, documented threat model, installed-session smoke, and opt-in live gate
+21. Reproducible wheel/source releases, SPDX SBOM, checksums, CI, governance, and draft publishing
 
 The currently executable AEML tools are:
 
@@ -117,19 +122,28 @@ Refreshed storage state is not written automatically. Use `--save-storage-state`
 an existing owner-private directory to opt in. Debug screenshots are also disabled by default;
 `--debug-artifacts PRIVATE_DIRECTORY` enables uniquely named, owner-private captures.
 
-## Consumer wheel
+## Consumer artifacts
 
-Build and test the installable artifact without downloading build tooling:
+Build and test both consumer artifacts without downloading build tooling:
 
 ```bash
 python3 scripts/build_wheel.py
 python3 scripts/smoke_wheel.py dist/swoon_code-0.1.0-py3-none-any.whl
+python3 scripts/build_sdist.py
+python3 scripts/smoke_sdist.py dist/swoon_code-0.1.0.tar.gz
 ```
 
-This creates a pure-Python wheel with the `swoon` console entry point and validates it in a fresh,
-networkless virtual environment. A real installation then resolves Playwright and installs its
-browser separately. See [Consumer build and test](docs/consumer-testing.md) for exact source,
-wheel, browser, cookie, relay, and agent acceptance steps.
+The wheel exposes the `swoon` console entry point; the source archive can rebuild that wheel. Both
+are exercised in fresh, networkless environments. A complete clean-tree release rehearsal also
+creates a direct-dependency SPDX document, artifact manifest, and checksums:
+
+```bash
+python3 scripts/release.py --out-dir /tmp/swoon-release
+```
+
+A real installation resolves Playwright and installs Chromium separately; the browser is not
+bundled into these artifacts. See [Consumer build and test](docs/consumer-testing.md) for exact
+source, package, browser, cookie, relay, and agent acceptance steps.
 
 ## Agent CLI
 
@@ -305,6 +319,8 @@ background-command guides for the embedding API and safety boundaries.
 Swoon Code is licensed under the [Apache License 2.0](LICENSE). The source distribution and wheel
 carry the SPDX identifier `Apache-2.0`, the complete license, and the project [NOTICE](NOTICE).
 Third-party products and dependencies remain subject to their own licenses and terms.
+See [Third-party notices](THIRD_PARTY_NOTICES.md) for the direct dependency and separately
+installed runtime boundary.
 
 The [responsible-use statement](RESPONSIBLE_USE.md) explains the project's educational purpose,
 independence, credential precautions, and user responsibility. It is guidance rather than an
@@ -328,7 +344,13 @@ additional restriction on the Apache-2.0 license.
 - `docs/supported-scope.md` — Phase 18 product, platform, and transport support boundary
 - `docs/session-cli.md` — Phase 19 human-side output export and retained-session management
 - `docs/security-model.md` — Phase 20 trust boundaries and adversarial/live release gates
+- `docs/release-checklist.md` — Phase 21 offline, live, tag, and publication gates
 - `RESPONSIBLE_USE.md` — educational purpose, non-affiliation, and user responsibility
+- `SECURITY.md` — private vulnerability reporting and supported security scope
+- `SUPPORT.md` — issue-reporting and redaction expectations
+- `CONTRIBUTING.md` — development, testing, and contribution policy
+- `CHANGELOG.md` — release-candidate history
+- `THIRD_PARTY_NOTICES.md` — dependency and external-runtime notices
 - `MIGRATION.md` — original relay history
 
 ## Tests
@@ -337,7 +359,10 @@ additional restriction on the Apache-2.0 license.
 .venv/bin/python -m unittest discover -s tests -v
 python3 scripts/aeml_eval.py
 python3 scripts/smoke_wheel.py
+python3 scripts/smoke_sdist.py
+python3 scripts/release.py --out-dir /tmp/swoon-release
 ```
 
-These automated gates are offline. A release owner can separately run the credentialed,
-provider-authorized live gate described in `docs/security-model.md`; it is never run by CI.
+These gates do not contact ChatGPT. A release owner can separately run the credentialed,
+provider-authorized live gate described in `docs/security-model.md`; credentials are never put in
+CI. Follow the complete [release checklist](docs/release-checklist.md) before publishing.

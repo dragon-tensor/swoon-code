@@ -1,8 +1,9 @@
 # Security model and adversarial verification
 
 Phase 20 records the trust boundaries that Swoon relies on and supplies deterministic adversarial
-and opt-in live release gates. This document is a threat model, not a claim that sandboxed software
-is invulnerable.
+and opt-in live release gates. Phase 21 adds reproducible package, SBOM, checksum, manifest, CI, and
+tag/publication controls. This document is a threat model, not a claim that sandboxed software is
+invulnerable.
 
 ## Assets and trust boundaries
 
@@ -36,7 +37,7 @@ therefore remains necessary.
 | Cookie disclosure | Owner-only regular file, bounded JSON/domain validation, opt-in private state/debug outputs | Compromised host or deliberately shared credential; revoke provider session |
 | Web UI drift | Multiple selectors, bounded waits, structured failure, no automatic screenshot | Selectors and auth flow can still break; owner-run live gate for every release |
 | Session data retention | Private storage, explicit show/export/delete commands, no in-place source mutation | Operator retains sensitive data too long; documented cleanup policy |
-| Supply-chain substitution | Minimal dependency set, deterministic wheel checks, release checksums/SBOM in Phase 21 | Dependency compromise; ongoing update and vulnerability review |
+| Supply-chain substitution | Minimal dependency set; reproducible wheel/source archive; direct-dependency SPDX; commit-bound manifest; checksums; GitHub provenance | Dependency or CI compromise; ongoing update, artifact, and vulnerability review |
 
 ## Deterministic adversarial gate
 
@@ -70,8 +71,10 @@ that has not passed this gate on its target host is offline-verified, not live-v
 
 ## Security review cadence
 
-Every release should rerun the full unit suite, adversarial corpus, installed-wheel smoke, and
-owner-authorized live gate. Changes to paths, file mutation, confirmation, command sandboxing,
-browser credentials, or release packaging require focused regression tests. A hosted-service UI,
-browser runtime, kernel, and dependencies can change after release, so these controls need ongoing
-maintenance and cannot make the project permanently safe “once and for all.”
+Every release should rerun the full unit suite, adversarial corpus, installed wheel/source smokes,
+reproducibility gate, and owner-authorized live gate. The release workflow deliberately creates a
+draft rather than publishing automatically. Changes to paths, file mutation, confirmation, command
+sandboxing, browser credentials, or release packaging require focused regression tests. A
+hosted-service UI, browser runtime, kernel, and dependencies can change after release, so these
+controls need ongoing maintenance and cannot make the project permanently safe “once and for
+all.”

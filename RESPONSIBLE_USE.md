@@ -37,6 +37,9 @@ The browser adapter rejects broadly readable POSIX credential files and does not
 state or screenshots unless the user explicitly requests those outputs. These controls reduce
 accidental disclosure; they do not make a browser cookie safe to share.
 
+The project threat model and the release gates that keep live credentials out of unattended CI are
+documented in [`docs/security-model.md`](docs/security-model.md).
+
 ## License and warranty
 
 The software is licensed under the Apache License 2.0. `LICENSE` is the controlling license text;

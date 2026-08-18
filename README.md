@@ -40,6 +40,7 @@ Implemented foundations:
 17. Apache-2.0 licensing, responsible-use guidance, and legal metadata in release artifacts
 18. Owner-private browser credentials, opt-in debug artifacts, and an explicit supported scope
 19. Human-side session listing, output export, guarded cleanup, and consumer retention guidance
+20. Adversarial AEML corpus, documented threat model, installed-session smoke, and opt-in live gate
 
 The currently executable AEML tools are:
 
@@ -326,6 +327,7 @@ additional restriction on the Apache-2.0 license.
 - `docs/dependency-changes.md` — Phase 16 exact declaration and lockfile safety boundary
 - `docs/supported-scope.md` — Phase 18 product, platform, and transport support boundary
 - `docs/session-cli.md` — Phase 19 human-side output export and retained-session management
+- `docs/security-model.md` — Phase 20 trust boundaries and adversarial/live release gates
 - `RESPONSIBLE_USE.md` — educational purpose, non-affiliation, and user responsibility
 - `MIGRATION.md` — original relay history
 
@@ -333,4 +335,9 @@ additional restriction on the Apache-2.0 license.
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
+python3 scripts/aeml_eval.py
+python3 scripts/smoke_wheel.py
 ```
+
+These automated gates are offline. A release owner can separately run the credentialed,
+provider-authorized live gate described in `docs/security-model.md`; it is never run by CI.

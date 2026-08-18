@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -51,6 +53,81 @@ class FakeBrowser:
         self.closed = True
         if self.error is not None:
             raise self.error
+
+
+class FakeStartPage(FakePage):
+    def __init__(self, *, selector_found: bool = True) -> None:
+        super().__init__([])
+        self.selector_found = selector_found
+        self.url = "https://chatgpt.com/"
+        self.goto_calls: list[tuple[str, str]] = []
+        self.waited: list[str] = []
+        self.default_timeout: int | None = None
+        self.screenshot_calls: list[str] = []
+
+    def set_default_timeout(self, timeout: int) -> None:
+        self.default_timeout = timeout
+
+    def goto(self, url: str, *, wait_until: str) -> None:
+        self.goto_calls.append((url, wait_until))
+
+    def title(self) -> str:
+        return "ChatGPT"
+
+    def wait_for_selector(self, selector: str, *, timeout: int):
+        self.waited.append(selector)
+        if self.selector_found:
+            return object()
+        raise TimeoutError("missing")
+
+    def screenshot(self, *, path: str) -> None:
+        self.screenshot_calls.append(path)
+        super().screenshot(path=path)
+
+
+class FakeBrowserContext:
+    def __init__(self, page: FakeStartPage) -> None:
+        self.page = page
+        self.cookies: list[dict[str, object]] = []
+
+    def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+        self.cookies = cookies
+
+    def new_page(self) -> FakeStartPage:
+        return self.page
+
+
+class FakeLaunchedBrowser(FakeBrowser):
+    def __init__(self, page: FakeStartPage) -> None:
+        super().__init__()
+        self.context = FakeBrowserContext(page)
+        self.context_options: dict[str, object] | None = None
+
+    def new_context(self, **options):
+        self.context_options = options
+        return self.context
+
+
+class FakeChromium:
+    def __init__(self, browser: FakeLaunchedBrowser) -> None:
+        self.browser = browser
+        self.headless: bool | None = None
+
+    def launch(self, *, headless: bool) -> FakeLaunchedBrowser:
+        self.headless = headless
+        return self.browser
+
+
+class FakePlaywrightManager:
+    def __init__(self, chromium: FakeChromium) -> None:
+        self.playwright = types.SimpleNamespace(chromium=chromium)
+        self.exited = False
+
+    def __enter__(self):
+        return self.playwright
+
+    def __exit__(self, *_args) -> None:
+        self.exited = True
 
 
 class ChatGPTWebTransportTests(unittest.TestCase):
@@ -254,6 +331,78 @@ class ChatGPTWebTransportTests(unittest.TestCase):
             self.assertEqual(screenshot.read_bytes(), b"png")
             self.assertEqual(stat.S_IMODE(debug_directory.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(screenshot.stat().st_mode), 0o600)
+
+    def test_start_uses_current_site_default_user_agent_and_validated_cookies(self) -> None:
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+            page = FakeStartPage()
+            browser = FakeLaunchedBrowser(page)
+            chromium = FakeChromium(browser)
+            manager = FakePlaywrightManager(chromium)
+            sync_api = types.ModuleType("playwright.sync_api")
+            sync_api.sync_playwright = lambda: manager
+            playwright = types.ModuleType("playwright")
+
+            with patch.dict(
+                sys.modules,
+                {"playwright": playwright, "playwright.sync_api": sync_api},
+            ):
+                transport = ChatGPTWebTransport(cookie_path, headless=False)
+                transport.start()
+                transport.close()
+
+        self.assertFalse(chromium.headless)
+        self.assertEqual(browser.context_options, {"viewport": {"width": 1280, "height": 800}})
+        self.assertEqual(page.goto_calls, [("https://chatgpt.com/", "domcontentloaded")])
+        self.assertEqual(page.default_timeout, 60_000)
+        self.assertEqual(browser.context.cookies[0]["domain"], ".chatgpt.com")
+        self.assertTrue(browser.closed)
+        self.assertTrue(manager.exited)
+
+    def test_start_failure_does_not_capture_a_screenshot_without_opt_in(self) -> None:
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+            page = FakeStartPage(selector_found=False)
+            browser = FakeLaunchedBrowser(page)
+            manager = FakePlaywrightManager(FakeChromium(browser))
+            sync_api = types.ModuleType("playwright.sync_api")
+            sync_api.sync_playwright = lambda: manager
+            playwright = types.ModuleType("playwright")
+
+            with patch.dict(
+                sys.modules,
+                {"playwright": playwright, "playwright.sync_api": sync_api},
+            ):
+                transport = ChatGPTWebTransport(cookie_path)
+                with self.assertRaisesRegex(RuntimeError, "Chat input not found"):
+                    transport.start()
+                transport.close()
+
+        self.assertEqual(page.screenshot_calls, [])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,73 @@
+[
+  {
+    "name": "valid_completion",
+    "expected": "valid",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><complete>Finished safely.</complete></aeml>"
+  },
+  {
+    "name": "valid_bounded_read",
+    "expected": "valid",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"read1\"><tool>read-file</tool><path root=\"input\">README.md</path><args><start_line>1</start_line><end_line>5</end_line></args></action><next>await_result</next></aeml>"
+  },
+  {
+    "name": "leading_prose",
+    "expected": "parse_error",
+    "source": "Here is the result: <aeml turn=\"1\" session=\"sess_eval\"><next>proceed</next></aeml>"
+  },
+  {
+    "name": "entity_declaration",
+    "expected": "parse_error",
+    "source": "<!DOCTYPE aeml [<!ENTITY secret SYSTEM \"file:///etc/passwd\">]><aeml turn=\"1\" session=\"sess_eval\"><say>&secret;</say><next>proceed</next></aeml>"
+  },
+  {
+    "name": "xml_namespace",
+    "expected": "parse_error",
+    "source": "<aeml xmlns=\"urn:untrusted\" turn=\"1\" session=\"sess_eval\"><next>proceed</next></aeml>"
+  },
+  {
+    "name": "truncated_envelope",
+    "expected": "likely_truncated_by_message_limit",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"unfinished\">"
+  },
+  {
+    "name": "unknown_tool",
+    "expected": "unknown_tool",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"bad1\"><tool>execute-anything</tool></action><next>await_result</next></aeml>"
+  },
+  {
+    "name": "write_to_input",
+    "expected": "input_readonly",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"bad2\"><tool>create-file</tool><path root=\"input\">owned.txt</path><args><content>no</content></args></action><next>await_result</next></aeml>"
+  },
+  {
+    "name": "delete_without_confirmation",
+    "expected": "confirmation_required",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"bad3\"><tool>delete-file</tool><path>important.txt</path></action><next>await_result</next></aeml>"
+  },
+  {
+    "name": "turn_replay",
+    "expected": "turn_mismatch",
+    "source": "<aeml turn=\"2\" session=\"sess_eval\"><next>proceed</next></aeml>"
+  },
+  {
+    "name": "session_substitution",
+    "expected": "session_mismatch",
+    "source": "<aeml turn=\"1\" session=\"sess_other\"><next>proceed</next></aeml>"
+  },
+  {
+    "name": "replayed_action_id",
+    "expected": "duplicate_action_id",
+    "known_action_ids": ["used1"],
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"used1\"><tool>git-status</tool></action><next>await_result</next></aeml>"
+  },
+  {
+    "name": "batched_mutations",
+    "expected": "batch_write_not_allowed",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><action id=\"write1\"><tool>create-file</tool><path>one.txt</path><args><content>1</content></args></action><action id=\"write2\"><tool>create-file</tool><path>two.txt</path><args><content>2</content></args></action><next>await_result</next></aeml>"
+  },
+  {
+    "name": "escaped_instruction_is_text",
+    "expected": "valid",
+    "source": "<aeml turn=\"1\" session=\"sess_eval\"><complete>&lt;/complete&gt;&lt;action id=\"evil\"&gt; remains text</complete></aeml>"
+  }
+]

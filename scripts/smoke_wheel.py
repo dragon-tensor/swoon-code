@@ -54,12 +54,76 @@ def smoke_wheel(wheel: Path | None = None) -> None:
         doctor_help = _run(console, "doctor", "--help", environment=command_environment)
         if "--launch-browser" not in doctor_help:
             raise RuntimeError("Installed doctor help is incomplete")
+        session_help = _run(console, "session", "--help", environment=command_environment)
+        if not all(action in session_help for action in ("list", "show", "export", "delete")):
+            raise RuntimeError("Installed session-management help is incomplete")
         _run(
             python,
             "-c",
             f"import swoon; assert swoon.__version__ == {expected_version!r}",
             environment=command_environment,
         )
+
+        session_root = temporary / "sessions"
+        exported = temporary / "exported"
+        _run(
+            python,
+            "-c",
+            (
+                "from pathlib import Path; "
+                "from swoon.session import SessionManager, SessionStatus; "
+                f"m=SessionManager(Path({str(session_root)!r})); "
+                "s=m.create(session_id='sess_wheel_smoke'); "
+                "(s.paths.host_output/'result.txt').write_text('installed\\n',encoding='utf-8'); "
+                "m.set_status(s,SessionStatus.COMPLETED)"
+            ),
+            environment=command_environment,
+        )
+        listed = _run(
+            console,
+            "session",
+            "list",
+            "--session-dir",
+            str(session_root),
+            environment=command_environment,
+        )
+        if "sess_wheel_smoke\tcompleted" not in listed:
+            raise RuntimeError("Installed CLI did not list its consumer smoke session")
+        shown = _run(
+            console,
+            "session",
+            "show",
+            "sess_wheel_smoke",
+            "--session-dir",
+            str(session_root),
+            environment=command_environment,
+        )
+        if "Status: completed" not in shown:
+            raise RuntimeError("Installed CLI did not inspect its consumer smoke session")
+        _run(
+            console,
+            "session",
+            "export",
+            "sess_wheel_smoke",
+            str(exported),
+            "--session-dir",
+            str(session_root),
+            environment=command_environment,
+        )
+        if (exported / "result.txt").read_text(encoding="utf-8") != "installed\n":
+            raise RuntimeError("Installed CLI session export produced unexpected output")
+        _run(
+            console,
+            "session",
+            "delete",
+            "sess_wheel_smoke",
+            "--yes",
+            "--session-dir",
+            str(session_root),
+            environment=command_environment,
+        )
+        if (session_root / "sess_wheel_smoke").exists():
+            raise RuntimeError("Installed CLI session deletion did not complete")
         _run(
             python,
             "-c",

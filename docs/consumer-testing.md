@@ -30,6 +30,15 @@ The launch probe can fail inside a container or development sandbox even when Ch
 installed. Running it in the same terminal environment that will run Swoon is the meaningful
 consumer check.
 
+Run the deterministic adversarial protocol corpus as a separate offline gate:
+
+```bash
+python3 scripts/aeml_eval.py
+```
+
+It parses and validates hostile fixtures but never dispatches an action. The full threat model and
+the explicitly owner-authorized live gate are documented in `security-model.md`.
+
 ## Build the wheel
 
 The repository includes a deterministic standard-library builder, so creating the project wheel

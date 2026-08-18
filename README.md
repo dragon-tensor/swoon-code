@@ -38,6 +38,7 @@ Implemented foundations:
 15. Offline wheel packaging, installed-entrypoint smoke testing, and consumer diagnostics
 16. Confirmed exact dependency declaration changes with atomic manifests and lockfile refusal
 17. Apache-2.0 licensing, responsible-use guidance, and legal metadata in release artifacts
+18. Owner-private browser credentials, opt-in debug artifacts, and an explicit supported scope
 
 The currently executable AEML tools are:
 
@@ -103,7 +104,16 @@ Linux filesystem exposing `renameat2(RENAME_NOREPLACE)`; an unsupported host fai
 of risking destination replacement.
 
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
-Cookie-Editor list and a Playwright storage-state object are accepted.
+Cookie-Editor list and a Playwright storage-state object are accepted. On POSIX systems the file
+must be owner-only:
+
+```bash
+chmod 600 cookies.json
+```
+
+Refreshed storage state is not written automatically. Use `--save-storage-state` with a path in
+an existing owner-private directory to opt in. Debug screenshots are also disabled by default;
+`--debug-artifacts PRIVATE_DIRECTORY` enables uniquely named, owner-private captures.
 
 ## Consumer wheel
 
@@ -186,6 +196,11 @@ the network.
 
 # Visible browser for debugging
 ./chatgpt.sh --cookies cookies.json --headed -v -p "Hello"
+
+# Explicitly save refreshed credentials in an owner-private directory
+./chatgpt.sh --cookies cookies.json \
+  --save-storage-state "$HOME/.local/share/swoon-code/refreshed-state.json" \
+  -p "Hello"
 ```
 
 The legacy `chatgpt_agent.py` entrypoint remains compatible. The browser implementation is
@@ -285,6 +300,7 @@ additional restriction on the Apache-2.0 license.
 - `docs/filesystem-lifecycle.md` — Phase 14 guarded delete/move/rename/chmod boundary
 - `docs/consumer-testing.md` — Phase 15 wheel build, installation, doctor, and acceptance flow
 - `docs/dependency-changes.md` — Phase 16 exact declaration and lockfile safety boundary
+- `docs/supported-scope.md` — Phase 18 product, platform, and transport support boundary
 - `RESPONSIBLE_USE.md` — educational purpose, non-affiliation, and user responsibility
 - `MIGRATION.md` — original relay history
 

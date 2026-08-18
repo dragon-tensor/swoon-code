@@ -28,7 +28,8 @@ swoon doctor --cookies cookies.json --launch-browser
 
 The default check verifies the Python package, installed Playwright/Chromium files, and optional
 command-sandbox executables. Supplying `--cookies` validates the local JSON without printing its
-contents. `--launch-browser` additionally opens and closes headless Chromium; run that stronger
+contents. On POSIX systems, validation rejects symbolic links and group/other-readable credential
+files; use `chmod 600 cookies.json`. `--launch-browser` additionally opens and closes headless Chromium; run that stronger
 probe from the same host terminal that will run the agent, since containers can deny browser
 launch even when the browser is correctly installed.
 
@@ -50,7 +51,13 @@ options are:
 - `--max-steps N` — set the initial budget from 1 through 10,000;
 - `--protocol-retries N` — allow 0 through 10 AEML repair attempts after the original response;
 - `--headed` and `--verbose` — expose the browser and transport diagnostics;
+- `--save-storage-state PATH` — explicitly persist refreshed credentials with owner-only mode;
+- `--debug-artifacts DIRECTORY` — explicitly allow uniquely named private startup screenshots;
 - `--timeout SECONDS` — set the positive response timeout.
+
+Storage-state persistence and screenshots are disabled by default because both can contain account
+or conversation information. Their parent directories must already be owner-private. Cleanup or
+storage failures are reported rather than silently ignored.
 
 If `--prompt` is omitted, interactive mode asks for the initial task before creating a new
 session. `--non-interactive` instead requires `--prompt` and returns exit 6 if it is absent.

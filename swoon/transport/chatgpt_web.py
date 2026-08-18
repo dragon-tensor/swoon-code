@@ -7,13 +7,34 @@ the next assistant message; protocol parsing belongs to :mod:`swoon.aeml`.
 from __future__ import annotations
 
 import json
+import os
+import stat
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 SAMESITE_MAP = {"lax": "Lax", "strict": "Strict", "none": "None"}
+CHATGPT_URL = "https://chatgpt.com/"
+MAX_COOKIE_FILE_BYTES = 2 * 1024 * 1024
+ALLOWED_COOKIE_DOMAINS = ("openai.com", "chatgpt.com")
+_COOKIE_FIELDS = frozenset(
+    {
+        "name",
+        "value",
+        "url",
+        "domain",
+        "path",
+        "expires",
+        "httpOnly",
+        "secure",
+        "sameSite",
+        "partitionKey",
+    }
+)
 
 TEXTAREA_SELECTORS = (
     "#prompt-textarea",
@@ -33,12 +54,6 @@ STOP_BUTTON_SELECTORS = (
 )
 MESSAGE_SELECTOR = "[data-message-author-role='assistant']"
 
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-)
-
-
 class ChatGPTWebTransport:
     """Send text to ChatGPT through an authenticated browser session."""
 
@@ -49,11 +64,19 @@ class ChatGPTWebTransport:
         *,
         headless: bool = True,
         response_timeout: float = 180,
+        storage_state_path: str | Path | None = None,
+        debug_directory: str | Path | None = None,
     ) -> None:
-        self.cookie_path = Path(cookie_path)
+        self.cookie_path = Path(cookie_path).expanduser()
         self.verbose = verbose
         self.headless = headless
         self.response_timeout = response_timeout
+        self.storage_state_path = (
+            Path(storage_state_path).expanduser() if storage_state_path is not None else None
+        )
+        self.debug_directory = (
+            Path(debug_directory).expanduser() if debug_directory is not None else None
+        )
         self._playwright_cm: Any = None
         self.playwright: Any = None
         self.browser: Any = None
@@ -66,28 +89,110 @@ class ChatGPTWebTransport:
             print(f"[chatgpt] {message}", file=sys.stderr)
 
     def _load_cookies(self) -> list[dict[str, Any]]:
-        with self.cookie_path.open(encoding="utf-8") as cookie_file:
-            raw: Any = json.load(cookie_file)
+        raw = self._read_private_json(self.cookie_path)
 
         if isinstance(raw, dict):
             raw = raw.get("cookies")
         if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
             raise ValueError("Cookie file must be a cookie list or Playwright storage state")
+        if not raw:
+            raise ValueError("Cookie file contains no cookies")
 
         cookies: list[dict[str, Any]] = []
         for original in raw:
-            cookie = dict(original)
+            cookie = {key: value for key, value in original.items() if key in _COOKIE_FIELDS}
+            if "expires" not in cookie and "expirationDate" in original:
+                cookie["expires"] = original["expirationDate"]
+            name = cookie.get("name")
+            value = cookie.get("value")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("Every cookie requires a non-empty name")
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Cookie {name!r} requires a non-empty value")
+            if self._looks_like_placeholder(name) or self._looks_like_placeholder(value):
+                raise ValueError("Cookie file still contains example placeholder values")
+
+            domain = cookie.get("domain")
+            url = cookie.get("url")
+            if domain is None and url is None:
+                raise ValueError(f"Cookie {name!r} requires a domain or URL")
+            if domain is not None:
+                if not isinstance(domain, str) or not self._allowed_domain(domain):
+                    raise ValueError(f"Cookie {name!r} is outside an approved service domain")
+            if url is not None:
+                if not isinstance(url, str):
+                    raise ValueError(f"Cookie {name!r} has an invalid URL")
+                parsed = urlsplit(url)
+                if parsed.scheme != "https" or not parsed.hostname or not self._allowed_domain(
+                    parsed.hostname
+                ):
+                    raise ValueError(f"Cookie {name!r} has an unapproved URL")
+
             same_site = cookie.get("sameSite")
             if isinstance(same_site, str):
                 cookie["sameSite"] = SAMESITE_MAP.get(same_site.lower(), same_site)
-            domain = cookie.get("domain")
-            if isinstance(domain, str) and "openai.com" in domain and not domain.startswith("."):
-                cookie["domain"] = "." + domain.lstrip(".")
-                cookie["hostOnly"] = False
+                if cookie["sameSite"] not in SAMESITE_MAP.values():
+                    raise ValueError(f"Cookie {name!r} has an invalid sameSite value")
+            elif same_site is not None:
+                raise ValueError(f"Cookie {name!r} has an invalid sameSite value")
+            if "path" not in cookie and domain is not None:
+                cookie["path"] = "/"
             cookies.append(cookie)
 
         self.log(f"Loaded {len(cookies)} cookies")
         return cookies
+
+    @staticmethod
+    def _looks_like_placeholder(value: str) -> bool:
+        folded = value.strip().casefold()
+        return (
+            folded.startswith("paste_your_")
+            or folded.startswith("replace_")
+            or folded in {"changeme", "example", "placeholder"}
+        )
+
+    @staticmethod
+    def _allowed_domain(value: str) -> bool:
+        domain = value.strip().casefold().lstrip(".").rstrip(".")
+        return any(
+            domain == allowed or domain.endswith("." + allowed)
+            for allowed in ALLOWED_COOKIE_DOMAINS
+        )
+
+    @staticmethod
+    def _read_private_json(path: Path) -> Any:
+        try:
+            item = path.lstat()
+        except OSError as error:
+            raise ValueError("Cookie file is missing or unreadable") from error
+        if stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
+            raise ValueError("Cookie path must be a regular file, not a symbolic link")
+        if os.name == "posix" and stat.S_IMODE(item.st_mode) & 0o077:
+            raise ValueError("Cookie file must be owner-only; run chmod 600 on it")
+        if item.st_size > MAX_COOKIE_FILE_BYTES:
+            raise ValueError("Cookie file exceeds the 2 MiB safety limit")
+
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as error:
+            raise ValueError("Cookie file is missing or unreadable") from error
+        try:
+            opened = os.fstat(descriptor)
+            if not stat.S_ISREG(opened.st_mode) or (
+                (opened.st_dev, opened.st_ino) != (item.st_dev, item.st_ino)
+            ):
+                raise ValueError("Cookie file changed while it was being opened")
+            with os.fdopen(descriptor, "rb", closefd=False) as cookie_file:
+                payload = cookie_file.read(MAX_COOKIE_FILE_BYTES + 1)
+        finally:
+            os.close(descriptor)
+        if len(payload) > MAX_COOKIE_FILE_BYTES:
+            raise ValueError("Cookie file exceeds the 2 MiB safety limit")
+        try:
+            return json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Cookie file must contain valid UTF-8 JSON") from error
 
     def start(self) -> None:
         from playwright.sync_api import sync_playwright
@@ -97,14 +202,13 @@ class ChatGPTWebTransport:
         self.browser = self.playwright.chromium.launch(headless=self.headless)
         self.context = self.browser.new_context(
             viewport={"width": 1280, "height": 800},
-            user_agent=USER_AGENT,
         )
         self.context.add_cookies(self.raw_cookies)
         self.page = self.context.new_page()
         self.page.set_default_timeout(60_000)
 
-        self.log("Navigating to chat.openai.com...")
-        self.page.goto("https://chat.openai.com", wait_until="domcontentloaded")
+        self.log("Navigating to chatgpt.com...")
+        self.page.goto(CHATGPT_URL, wait_until="domcontentloaded")
         for _ in range(60):
             if "just a moment" not in self.page.title().lower():
                 break
@@ -123,8 +227,40 @@ class ChatGPTWebTransport:
             except Exception:
                 continue
 
-        self.page.screenshot(path="/tmp/chatgpt_debug.png")
-        raise RuntimeError("Chat input not found. Session expired?")
+        debug_note = ""
+        if self.debug_directory is not None:
+            try:
+                screenshot = self._capture_debug_screenshot()
+                debug_note = f" Debug screenshot: {screenshot}."
+            except Exception as error:
+                debug_note = f" Debug capture failed ({error.__class__.__name__})."
+        raise RuntimeError(f"Chat input not found. Session expired?{debug_note}")
+
+    def _capture_debug_screenshot(self) -> Path:
+        if self.page is None or self.debug_directory is None:
+            raise RuntimeError("Debug screenshot capture is not enabled")
+        directory = self.debug_directory
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        item = directory.lstat()
+        if stat.S_ISLNK(item.st_mode) or not stat.S_ISDIR(item.st_mode):
+            raise ValueError("Debug artifact path must be a regular directory")
+        if os.name == "posix" and stat.S_IMODE(item.st_mode) & 0o077:
+            raise ValueError("Debug artifact directory must be owner-only")
+        descriptor, raw_path = tempfile.mkstemp(
+            prefix="swoon-chatgpt-",
+            suffix=".png",
+            dir=directory,
+        )
+        os.close(descriptor)
+        screenshot = Path(raw_path)
+        try:
+            screenshot.chmod(0o600)
+            self.page.screenshot(path=str(screenshot))
+            screenshot.chmod(0o600)
+        except Exception:
+            screenshot.unlink(missing_ok=True)
+            raise
+        return screenshot
 
     def _dismiss_modals(self) -> bool:
         if self.page is None:
@@ -227,24 +363,72 @@ class ChatGPTWebTransport:
         raise TimeoutError("No new assistant response arrived before the timeout")
 
     def close(self) -> None:
-        if self.context is not None:
+        errors: list[str] = []
+        if self.context is not None and self.storage_state_path is not None:
             try:
-                self.context.storage_state(path=str(self.cookie_path) + ".state")
-            except Exception:
-                pass
+                state = self.context.storage_state()
+                self._write_private_json(self.storage_state_path, state)
+            except Exception as error:
+                errors.append(f"storage-state save failed ({error.__class__.__name__})")
         if self.browser is not None:
             try:
                 self.browser.close()
-            except Exception:
-                pass
+            except Exception as error:
+                errors.append(f"browser close failed ({error.__class__.__name__})")
         if self._playwright_cm is not None:
             try:
                 self._playwright_cm.__exit__(None, None, None)
-            except Exception:
-                pass
+            except Exception as error:
+                errors.append(f"Playwright close failed ({error.__class__.__name__})")
 
         self.page = None
         self.context = None
         self.browser = None
         self.playwright = None
         self._playwright_cm = None
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    @staticmethod
+    def _write_private_json(path: Path, payload: Any) -> None:
+        parent = path.parent
+        try:
+            parent_item = parent.lstat()
+        except OSError as error:
+            raise ValueError("Storage-state parent directory does not exist") from error
+        if stat.S_ISLNK(parent_item.st_mode) or not stat.S_ISDIR(parent_item.st_mode):
+            raise ValueError("Storage-state parent must be a regular directory")
+        if os.name == "posix" and stat.S_IMODE(parent_item.st_mode) & 0o077:
+            raise ValueError("Storage-state directory must be owner-only")
+        if path.exists() and path.is_symlink():
+            raise ValueError("Storage-state destination cannot be a symbolic link")
+
+        encoded = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode(
+            "utf-8"
+        )
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=parent,
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb", closefd=False) as output:
+                output.write(encoded)
+                output.flush()
+                os.fsync(output.fileno())
+            os.close(descriptor)
+            descriptor = -1
+            os.replace(temporary, path)
+            path.chmod(0o600)
+            if hasattr(os, "O_DIRECTORY"):
+                directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary.unlink(missing_ok=True)

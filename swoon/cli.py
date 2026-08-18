@@ -192,6 +192,16 @@ def _add_browser_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--headed", action="store_true", help="show the browser window")
     parser.add_argument(
+        "--save-storage-state",
+        metavar="PATH",
+        help="opt in to saving refreshed credentials to an owner-private JSON file",
+    )
+    parser.add_argument(
+        "--debug-artifacts",
+        metavar="DIRECTORY",
+        help="opt in to private screenshots when browser startup cannot find the chat input",
+    )
+    parser.add_argument(
         "--timeout",
         type=_positive_timeout,
         default=180.0,
@@ -581,6 +591,8 @@ def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:
         verbose=args.verbose,
         headless=not args.headed,
         response_timeout=args.timeout,
+        storage_state_path=args.save_storage_state,
+        debug_directory=args.debug_artifacts,
     )
 
 

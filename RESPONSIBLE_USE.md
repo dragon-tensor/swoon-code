@@ -33,6 +33,10 @@ use only your own authorized session, keep them outside distributable artifacts,
 permissions, never commit them, and revoke the session if exposure is suspected. Do not process
 third-party data without permission.
 
+The browser adapter rejects broadly readable POSIX credential files and does not save refreshed
+state or screenshots unless the user explicitly requests those outputs. These controls reduce
+accidental disclosure; they do not make a browser cookie safe to share.
+
 ## License and warranty
 
 The software is licensed under the Apache License 2.0. `LICENSE` is the controlling license text;

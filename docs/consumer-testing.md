@@ -17,7 +17,8 @@ The source checkout already supports Python's module launcher, even before insta
 
 `doctor` checks the installed Playwright/Chromium files and reports whether the optional offline
 command sandbox has `bwrap`, `prlimit`, a supported Linux architecture, and a system Python. It
-does not read cookies unless explicitly asked. Use the stronger probe from a normal host terminal:
+does not read cookies unless explicitly asked. A supplied POSIX cookie file must be a regular,
+owner-only file (`chmod 600 cookies.json`). Use the stronger probe from a normal host terminal:
 
 ```bash
 .venv/bin/python -m swoon doctor \
@@ -74,6 +75,11 @@ swoon-consumer/bin/swoon doctor --launch-browser --cookies cookies.json
 
 On Windows, replace `bin/` with `Scripts/`. Keep the cookie file private and outside distributable
 artifacts.
+
+The browser adapter targets `https://chatgpt.com/`, uses Playwright's own current user agent, and
+does not persist refreshed credentials or capture screenshots unless the matching CLI option is
+provided. Read `supported-scope.md` before treating a successful browser launch as permission to
+automate a connected service.
 
 Try the direct relay first:
 

@@ -44,7 +44,9 @@ This closes the policy-time gap but does not replace safe filesystem syscalls. T
 tools and Phase 11 mutations additionally use descriptor-relative no-follow primitives and
 verify opened entries. Raw LLM paths are never passed directly to file or shell operations.
 
-The path policy itself only authorizes. Separate tool layers perform reads and the six enabled
-output mutations. Phase 12 foreground execution uses the same policy while building filtered
-snapshots, and Phase 13 retains those snapshots only for bounded supervised background work.
-Both run only in disposable OS sandboxes; persistent delete remains disabled.
+The path policy itself only authorizes. Separate tool layers perform reads and the eleven enabled
+output mutations. Phase 14 delete/move/rename/chmod revalidate through descriptor-relative,
+no-follow operations; deletion additionally guards the complete bounded target snapshot. Phase 12
+foreground execution uses the same policy while building filtered snapshots, and Phase 13 retains
+those snapshots only for bounded supervised background work. Both command modes run only in
+disposable OS sandboxes.

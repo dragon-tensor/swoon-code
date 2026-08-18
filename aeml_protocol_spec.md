@@ -180,7 +180,7 @@ cli-agent
 │   │   ├── delete-file
 │   │   └── delete-dir
 │   ├── move / rename          (output root only)
-│   └── chmod                  (output root only)
+│   └── chmod                  (regular output files; owner-private 0600/0700 only)
 ├── package-management
 │   ├── install-dependency
 │   ├── remove-dependency
@@ -286,8 +286,8 @@ Rules:
 - Interpreter tracks the last `seq` seen per path. A `seq` that isn't exactly `previous + 1` is
   rejected — `<error code="chunk_sequence_error">` — no silent gap-filling.
 - Until a `<chunk final="true">` is received for a path, that file is "in progress." Any other
-  action that depends on it — `run-command`, `read-file`, `edit-file`, tests, git-add — is
-  rejected with `<error code="write_incomplete">` until finalized.
+  action that depends on it — `run-command`, `read-file`, `edit-file`, lifecycle changes, tests,
+  git-add — is rejected with `<error code="write_incomplete">` until finalized.
 - `edit-file` (str_replace-style patches) generally shouldn't need chunking — if a single patch
   is large enough to hit the limit, that's a signal it should be decomposed into several smaller
   `edit-file` calls against the same file rather than one chunked mega-patch.
@@ -536,8 +536,7 @@ Resolved by the agent CLI implementation:
 Resolved by the output filesystem mutation implementation:
 
 - `create-file`, `overwrite-file`, `append-file`, `edit-file`, `copy-file`, and `copy-dir` are
-  executable through a separate agent allowlist; input remains read-only and every other
-  mutating/executing registry schema stays disabled.
+  executable through a separate agent allowlist; input remains read-only.
 - File publication is descriptor-relative, no-follow, bounded, and atomic. Directory copies use
   exclusive destinations, filter credential-shaped entries, and clean up handled failures.
 - Chunk sequences advance atomically with successful action results and continue to block
@@ -576,6 +575,24 @@ Resolved by the background command implementation:
 - Terminal orchestration and every CLI exit explicitly stop live work and persist the reason.
   State schema v5 records monotonic output counters plus immutable exit/reason/end metadata.
 
+Resolved by the persistent filesystem lifecycle implementation:
+
+- `delete-file`, `delete-dir`, `move`, `rename`, and `chmod` execute only inside output. The
+  read-only compatibility dispatcher continues to reject them.
+- Both delete tools always persist the exact action plus a bounded file/tree metadata guard and
+  pause for a real-human decision. Approval after any guarded change fails with
+  `confirmation_stale`; denial changes nothing.
+- Directory preflight and removal reject links, hard-linked files, special entries, protected
+  descendants, roots, and configured entry/byte overflow. Every opened entry is reverified
+  through descriptor-relative no-follow access.
+- Move uses Linux `renameat2(RENAME_NOREPLACE)` and rename additionally requires one unchanged
+  parent. Missing atomic kernel support fails closed; an existing or racing destination is never
+  replaced, and recursive directory destinations are rejected.
+- `chmod` accepts only `0600`/`0700` on opened regular files. Broader modes and directories are
+  outside the capability.
+- Unfinished chunks block lifecycle operations. A successful delete clears chunk records under
+  its scope, while move/rename remaps them with the action result under the session lock.
+
 Remaining open items:
 
 - Whether a future network-service capability should retain and join a dedicated isolated network
@@ -583,5 +600,7 @@ Remaining open items:
   socket-denied and does not claim dev-server support.
 - How dependency installation should grant narrowly scoped network access, verify provenance,
   and promote package state without exposing user credentials or package caches.
+- How Git mutations should isolate hooks, configuration, credentials, and destructive history
+  changes while preserving exact-action confirmation.
 - Whether a future reviewed-patch workflow should allow selected command-generated changes to be
   promoted from the disposable workspace without bypassing destructive confirmation.

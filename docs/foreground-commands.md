@@ -25,8 +25,8 @@ into a size-limited tmpfs. The command's cwd is the normal logical output root, 
 the tmpfs is destroyed. New files, edits, deletes, build artifacts, caches, and linter fixes are
 therefore discarded regardless of exit status.
 
-This is intentional. An opaque command cannot bypass `overwrite-file` confirmation, future
-delete confirmation, or the interpreter's atomic mutation primitives. Persistent changes must be
+This is intentional. An opaque command cannot bypass overwrite/delete confirmation or the
+interpreter's atomic mutation primitives. Persistent changes must be
 requested through explicit filesystem tools. A result always includes
 `workspace_changes=discarded` so the hosted reasoning side cannot mistake a successful formatter
 or build for a persisted mutation.

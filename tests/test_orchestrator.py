@@ -487,6 +487,49 @@ class AgentOrchestratorTests(unittest.TestCase):
         self.assertIsNone(final.state.pending_confirmation)
         self.assertEqual(final.state.result_history, ("overwrite1",))
 
+    def test_delete_confirmation_survives_new_orchestrator_and_channel(self) -> None:
+        session = self.manager.create(session_id="sess_agent_delete_confirm")
+        target = session.paths.host_output / "obsolete.txt"
+        target.write_text("obsolete", encoding="utf-8")
+        first_transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_delete_confirm">'
+                    '<action id="delete1"><tool>delete-file</tool>'
+                    '<path>obsolete.txt</path><expect_confirm>true</expect_confirm>'
+                    "</action><next>await_result</next></aeml>"
+                )
+            ]
+        )
+
+        paused = self.agent(first_transport).run(session, "Delete obsolete.txt")
+
+        self.assertEqual(paused.reason, RunStopReason.AWAITING_CONFIRMATION)
+        self.assertTrue(target.is_file())
+        persisted = self.manager.load(session.id)
+        self.assertEqual(persisted.state.pending_confirmation.action.tool, "delete-file")
+
+        second_transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_delete_confirm">'
+                    "<complete>Approved deletion complete.</complete></aeml>"
+                )
+            ]
+        )
+        completed = self.agent(second_transport).run(
+            persisted,
+            None,
+            confirmation=True,
+        )
+
+        self.assertEqual(completed.reason, RunStopReason.COMPLETED)
+        self.assertFalse(target.exists())
+        self.assertIn('<result id="delete1">', second_transport.prompts[0])
+        final = self.manager.load(session.id)
+        self.assertIsNone(final.state.pending_confirmation)
+        self.assertEqual(final.state.result_history, ("delete1",))
+
     def test_denied_overwrite_is_persisted_as_failure_and_never_runs(self) -> None:
         session = self.manager.create(session_id="sess_agent_deny")
         target = session.paths.host_output / "app.py"

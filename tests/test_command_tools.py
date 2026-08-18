@@ -107,12 +107,14 @@ class ForegroundCommandToolTests(unittest.TestCase):
         prompt = AEMLPromptBuilder(self.dispatcher.tool_specs).initial(
             AEMLContextBuilder().build(self.session, turn=1, user_prompt="Verify output")
         )
-        self.assertIn('<available_tools count="20">', prompt)
+        self.assertIn('<available_tools count="25">', prompt)
         self.assertIn('name="run-command" effect="executing"', prompt)
         self.assertIn('name="run-command-background" effect="executing"', prompt)
         self.assertIn('name="stream-output" effect="read_only"', prompt)
         self.assertIn("filesystem changes are discarded", prompt.lower())
         self.assertIn("opaque handle", prompt.lower())
+        self.assertIn('name="delete-file" effect="mutating"', prompt)
+        self.assertIn("owner-private", prompt.lower())
 
     def test_command_reads_seed_but_all_workspace_changes_are_discarded(self) -> None:
         self.require_runtime()

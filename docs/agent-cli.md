@@ -7,7 +7,8 @@ addition to the seven read tools. Phase 12 adds four offline foreground tools: `
 `run-build`, `run-tests`, and `run-linter`. Their filesystems are disposable, so only explicit
 filesystem tools persist output changes. Phase 13 adds `run-command-background`, `stream-output`,
 and `kill-process` with the same disposable, offline boundary. Package operations, Git mutations,
-networked services, and the remaining mutating schemas stay disabled.
+and networked services stay disabled. Phase 14 adds persistent `delete-file`, `delete-dir`,
+`move`, `rename`, and restricted `chmod`; deletion reuses the exact-action decision flow below.
 
 On supported 64-bit Linux hosts, foreground execution requires `bwrap`, `prlimit`, and a system
 `python3`. Missing sandbox primitives return a tool error to the agent; the CLI never falls back
@@ -52,10 +53,11 @@ budget cannot exceed 10,000. This terminal input becomes the explicit human-side
 required by `SessionManager.extend_step_limit`; neither AEML nor prompt text can extend the
 budget.
 
-## Destructive overwrite confirmation
+## Destructive confirmation
 
-An `overwrite-file` action targeting a non-empty file pauses independently of `<ask_user>` and
-the step limit. The exact action and target guard are persisted before the CLI asks:
+An `overwrite-file` action targeting a non-empty file, and every `delete-file` or `delete-dir`,
+pauses independently of `<ask_user>` and the step limit. The exact action and target guard are
+persisted before the CLI asks:
 
 ```text
 Pending overwrite-file action 'overwrite1': ...
@@ -64,7 +66,7 @@ Approve this exact action? [y/N] (/abort to stop)>
 
 Empty input means denial. Denial leaves the target untouched and returns a failure result to the
 agent; `/abort` aborts the whole session. Approval fails closed with `confirmation_stale` if the
-target changed while the prompt was waiting.
+target or guarded directory tree changed while the prompt was waiting.
 
 In non-interactive mode, an unavailable decision returns exit 6. A later process decides only
 the stored action:

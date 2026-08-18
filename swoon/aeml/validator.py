@@ -34,7 +34,7 @@ from .tool_registry import TOOL_SPECS
 _SESSION_ID = re.compile(r"sess_[A-Za-z0-9_-]{1,64}\Z")
 _ACTION_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 _INTEGER = re.compile(r"-?[0-9]+\Z")
-_CHMOD_MODE = re.compile(r"0?[0-7]{3,4}\Z")
+_CHMOD_MODE = re.compile(r"0?(?:600|700)\Z")
 
 
 class AEMLValidator:
@@ -392,7 +392,7 @@ class AEMLValidator:
             if not isinstance(mode, str) or not _CHMOD_MODE.fullmatch(mode.strip()):
                 raise AEMLValidationError(
                     "invalid_argument",
-                    "chmod mode must be a three- or four-digit octal mode",
+                    "chmod mode must be owner-private 600 or 700",
                     action_id=action.id,
                 )
 

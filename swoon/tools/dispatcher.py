@@ -39,6 +39,7 @@ from .commands import ForegroundCommandTools
 from .errors import ToolExecutionError
 from .filesystem import FilesystemReadTools
 from .git import GitReadTools
+from .lifecycle import FilesystemLifecycleTools
 from .models import CommandToolLimits, MutationToolLimits, ReadToolLimits
 from .mutations import FilesystemMutationTools
 
@@ -63,6 +64,11 @@ IMPLEMENTED_MUTATION_TOOLS = frozenset(
         "edit-file",
         "copy-file",
         "copy-dir",
+        "delete-file",
+        "delete-dir",
+        "move",
+        "rename",
+        "chmod",
     }
 )
 IMPLEMENTED_EXECUTION_TOOLS = frozenset(
@@ -158,6 +164,10 @@ class ReadOnlyToolDispatcher:
         if sequence_error is not None:
             return ProtocolError("chunk_sequence_error", sequence_error, action.source.id)
 
+        state_error = self._chunk_lifecycle_state_error(action, session)
+        if state_error is not None:
+            return ProtocolError("chunk_state_conflict", state_error, action.source.id)
+
         confirmation = self._runtime_confirmation(action, session)
         if isinstance(confirmation, ProtocolError):
             return confirmation
@@ -185,7 +195,10 @@ class ReadOnlyToolDispatcher:
             ):
                 return ProtocolError(
                     "confirmation_stale",
-                    "The overwrite target changed after confirmation was requested",
+                    (
+                        f"The {action.spec.name} target changed after confirmation "
+                        "was requested"
+                    ),
                     action.source.id,
                 )
 
@@ -193,6 +206,7 @@ class ReadOnlyToolDispatcher:
         handler = self._handler(action, policy, session=session, confirmed=confirmed)
         if isinstance(handler, ProtocolError):
             return handler
+        chunk_lifecycle = self._chunk_lifecycle_metadata(action)
 
         last_error: ToolExecutionError | None = None
         attempts = (
@@ -216,6 +230,9 @@ class ReadOnlyToolDispatcher:
                         chunk_path=action.source.path if chunk is not None else None,
                         chunk_seq=chunk.seq if chunk is not None else None,
                         chunk_final=chunk.final if chunk is not None else None,
+                        chunk_remove_scope=chunk_lifecycle[0],
+                        chunk_move_from=chunk_lifecycle[1],
+                        chunk_move_to=chunk_lifecycle[2],
                         resolve_confirmation=(
                             confirmed
                             and pending is not None
@@ -287,6 +304,9 @@ class ReadOnlyToolDispatcher:
         sequence_error = self._chunk_sequence_error(action, session)
         if sequence_error is not None:
             return ProtocolError("chunk_sequence_error", sequence_error, action.source.id)
+        state_error = self._chunk_lifecycle_state_error(action, session)
+        if state_error is not None:
+            return ProtocolError("chunk_state_conflict", state_error, action.source.id)
         request = self._runtime_confirmation(action, session)
         if request is not None and not isinstance(request, ProtocolError):
             if action.source.expect_confirm is not True:
@@ -483,7 +503,73 @@ class ReadOnlyToolDispatcher:
                     parts = tuple(path.value.split("/"))
                     if parts[: len(scope)] == scope:
                         return "copy-dir scope contains an unfinished chunk sequence"
+        if action.spec.name in {"delete-file", "chmod"}:
+            path = action.source.path
+            if path is not None and path in pending:
+                return f"{path.value!r} has an unfinished chunk sequence"
+            return None
+        if action.spec.name == "delete-dir":
+            path = action.source.path
+            if path is not None:
+                scope = ReadOnlyToolDispatcher._path_parts(path)
+                for pending_path in pending:
+                    if ReadOnlyToolDispatcher._path_in_scope(pending_path, scope):
+                        return "delete-dir scope contains an unfinished chunk sequence"
+            return None
+        if action.spec.name in {"move", "rename"}:
+            source = action.argument("from")
+            target = action.argument("to")
+            for label, value in (("source", source), ("destination", target)):
+                if not isinstance(value, PathRef) or value.root is not Root.OUTPUT:
+                    continue
+                scope = ReadOnlyToolDispatcher._path_parts(value)
+                for pending_path in pending:
+                    if ReadOnlyToolDispatcher._path_in_scope(pending_path, scope):
+                        return (
+                            f"{action.spec.name} {label} contains an unfinished "
+                            "chunk sequence"
+                        )
         return None
+
+    @staticmethod
+    def _chunk_lifecycle_state_error(
+        action: ValidatedAction,
+        session: Session,
+    ) -> str | None:
+        if action.spec.name not in {"move", "rename"}:
+            return None
+        source = action.argument("from")
+        target = action.argument("to")
+        if not isinstance(source, PathRef) or not isinstance(target, PathRef):
+            return None
+        source_parts = ReadOnlyToolDispatcher._path_parts(source)
+        target_parts = ReadOnlyToolDispatcher._path_parts(target)
+        mapped: list[tuple[Root, str]] = []
+        for record in session.state.chunks:
+            record_parts = ReadOnlyToolDispatcher._path_parts(record.path)
+            if (
+                record.path.root is source.root
+                and record_parts[: len(source_parts)] == source_parts
+            ):
+                suffix = record_parts[len(source_parts) :]
+                value = "/".join(target_parts + suffix) or "."
+                mapped.append((target.root, value))
+            else:
+                mapped.append((record.path.root, record.path.value))
+        if len(mapped) != len(set(mapped)):
+            return "Move destination conflicts with existing chunk metadata"
+        return None
+
+    @staticmethod
+    def _path_parts(path: PathRef) -> tuple[str, ...]:
+        return () if path.value == "." else tuple(path.value.split("/"))
+
+    @staticmethod
+    def _path_in_scope(path: PathRef, scope: tuple[str, ...]) -> bool:
+        if path.root is not Root.OUTPUT:
+            return False
+        parts = ReadOnlyToolDispatcher._path_parts(path)
+        return parts[: len(scope)] == scope
 
     @staticmethod
     def _chunk_sequence_error(action: ValidatedAction, session: Session) -> str | None:
@@ -532,6 +618,19 @@ class ReadOnlyToolDispatcher:
         result: Result,
     ) -> tuple[str | None, int | None, int | None]:
         del action, result
+        return None, None, None
+
+    @staticmethod
+    def _chunk_lifecycle_metadata(
+        action: ValidatedAction,
+    ) -> tuple[PathRef | None, PathRef | None, PathRef | None]:
+        if action.spec.name in {"delete-file", "delete-dir"}:
+            return action.source.path, None, None
+        if action.spec.name in {"move", "rename"}:
+            source = action.argument("from")
+            target = action.argument("to")
+            if isinstance(source, PathRef) and isinstance(target, PathRef):
+                return None, source, target
         return None, None, None
 
     @staticmethod
@@ -602,6 +701,7 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
     ):
         if action.spec.name in IMPLEMENTED_MUTATION_TOOLS:
             filesystem = FilesystemMutationTools(policy, self.mutation_limits)
+            lifecycle = FilesystemLifecycleTools(policy, self.mutation_limits)
             return {
                 "create-file": filesystem.create_file,
                 "overwrite-file": lambda selected: filesystem.overwrite_file(
@@ -612,6 +712,11 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
                 "edit-file": filesystem.edit_file,
                 "copy-file": filesystem.copy_file,
                 "copy-dir": filesystem.copy_directory,
+                "delete-file": lifecycle.delete_file,
+                "delete-dir": lifecycle.delete_directory,
+                "move": lifecycle.move,
+                "rename": lifecycle.rename,
+                "chmod": lifecycle.chmod,
             }[action.spec.name]
         if action.spec.name in IMPLEMENTED_EXECUTION_TOOLS:
             commands = ForegroundCommandTools(
@@ -758,13 +863,20 @@ class AgentToolDispatcher(ReadOnlyToolDispatcher):
         action: ValidatedAction,
         session: Session,
     ) -> ConfirmationRequest | ProtocolError | None:
-        if action.spec.name != "overwrite-file":
+        if action.spec.name not in {"overwrite-file", "delete-file", "delete-dir"}:
             return None
         try:
-            reason, guard = FilesystemMutationTools(
-                PathPolicy(session.paths),
-                self.mutation_limits,
-            ).overwrite_confirmation_details(action)
+            policy = PathPolicy(session.paths)
+            if action.spec.name == "overwrite-file":
+                reason, guard = FilesystemMutationTools(
+                    policy,
+                    self.mutation_limits,
+                ).overwrite_confirmation_details(action)
+            else:
+                reason, guard = FilesystemLifecycleTools(
+                    policy,
+                    self.mutation_limits,
+                ).confirmation_details(action)
         except (PathPolicyError, ToolExecutionError) as error:
             code = getattr(error, "code", "tool_failed")
             return ProtocolError(code, str(error), action.source.id)

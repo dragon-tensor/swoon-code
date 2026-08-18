@@ -41,6 +41,24 @@ _TOOL_NOTES = {
     "copy-dir": (
         "Copy a directory to a missing output path, or to output:. only while output is empty."
     ),
+    "delete-file": (
+        "Permanently remove one output file. Always set expect_confirm=true; execution pauses "
+        "for real human approval of the exact guarded target."
+    ),
+    "delete-dir": (
+        "Permanently remove one bounded output tree. Always set expect_confirm=true; roots, "
+        "links, special files, and protected descendants are rejected."
+    ),
+    "move": (
+        "Atomically relocate an output file or directory to a missing output destination."
+    ),
+    "rename": (
+        "Atomically rename an output file or directory within its current parent; the "
+        "destination must be missing."
+    ),
+    "chmod": (
+        "Set a regular output file to owner-private mode 600 or 700 only."
+    ),
     "run-command": (
         "Run one shell-free argv command offline in a disposable output snapshot. Filesystem "
         "changes are discarded; use file tools for persistent changes."
@@ -113,6 +131,8 @@ STRICT RESPONSE CONTRACT
 - Paths are POSIX-style, relative to the selected virtual root, and never physical host paths.
 - Writes target output only. Prefer edit-file over overwrite-file; use copy-file/copy-dir instead
   of retyping existing input content. Credential-shaped paths remain inaccessible.
+- Deletes always require expect_confirm=true and a separate real-human decision. Move and rename
+  never replace an existing destination; chmod only toggles owner-private file executability.
 - Foreground command/build/test/linter runs are offline and disposable. Their filesystem changes
   never persist; request explicit file tools for changes that must remain in output.
 - Background commands are also offline and disposable. Stream them by opaque handle, kill them

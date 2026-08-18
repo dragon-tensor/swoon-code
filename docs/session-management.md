@@ -63,6 +63,8 @@ The current state schema is version 5. Versions 1 through 4 remain readable and 
 the next state update; older completed-result history seeds the durable used-action-ID set.
 Version 4 added the optional pending-confirmation record. Version 5 adds background output bytes,
 line bounds, exit codes, termination reasons, end timestamps, and the terminal `lost` state.
+Phase 14 needs no schema bump: lifecycle operations reuse existing chunk records and the existing
+pending-confirmation shape.
 
 ## Lifecycle operations
 
@@ -88,6 +90,11 @@ waiting at an exhausted limit; this keeps budget approval on the human-facing AP
 session to `waiting_user`. A normal status transition cannot reopen it as active; orchestration
 must approve/deny the exact persisted action, or abort. Successful approval and denial both
 clear the pending record while recording the result. Terminal abort/completion also clear it.
+
+`record_action_result` can apply lifecycle chunk metadata in the same locked state replacement as
+the successful result. Delete removes records under its path; move/rename remaps a source prefix
+to its destination and rejects duplicate destination records. Unfinished sequences are blocked
+before any lifecycle mutation reaches this method.
 
 Process PIDs are diagnostic data, not durable authority. Only the in-memory supervisor object
 that launched a process may signal it. After an interpreter restart, a record still marked

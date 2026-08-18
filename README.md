@@ -25,6 +25,7 @@ Implemented foundations:
 11. Output-only filesystem mutation with atomic file writes and resumable confirmation
 12. Offline foreground command, build, test, and linter sandboxing
 13. Supervised background commands with bounded streaming and handle-scoped termination
+14. Guarded output deletion, atomic relocation, and owner-private mode changes
 
 The currently executable AEML tools are:
 
@@ -48,15 +49,22 @@ The currently executable AEML tools are:
 - `run-command-background` (offline, disposable, and bounded)
 - `stream-output` (opaque handle plus UTF-8 byte offset)
 - `kill-process` (live session-owned handles only)
+- `delete-file` (always requires real-human confirmation)
+- `delete-dir` (bounded recursive deletion; always requires real-human confirmation)
+- `move` (atomic output-only relocation to a missing destination)
+- `rename` (atomic same-parent rename to a missing destination)
+- `chmod` (regular files; owner-private `0600` or `0700` only)
 
 Writes are confined to the session output root; input stays read-only. Foreground and background
 execution are offline and run against filtered disposable snapshots, so command-side filesystem
 changes never persist. Background work is addressed only by an opaque session handle; it cannot
-survive interpreter shutdown. Delete/move/chmod, Git mutations, package changes, networked
-services, and persistent environment changes remain disabled. The `swoon agent` command can
-drive these twenty capabilities until completion, a human question, destructive confirmation, a
-step-limit pause, an explicit abort, or bounded protocol-repair exhaustion. The separate
-`swoon chat` command and legacy `chatgpt.sh` wrapper remain direct chatbot relays.
+survive interpreter shutdown. Persistent deletion and relocation stay inside output and pass the
+same no-follow policy boundary; deletion is guarded by a separate human decision. Git mutations,
+package changes, networked services, and persistent environment changes remain disabled. The
+`swoon agent` command can drive these twenty-five capabilities until completion, a human question,
+destructive confirmation, a step-limit pause, an explicit abort, or bounded protocol-repair
+exhaustion. The separate `swoon chat` command and legacy `chatgpt.sh` wrapper remain direct
+chatbot relays.
 
 ## Setup
 
@@ -68,7 +76,9 @@ python3 -m venv .venv
 
 Command tools additionally require compatible `bwrap` and `prlimit` executables on 64-bit Linux
 (x86-64 or AArch64). They fail closed rather than falling back to unsandboxed
-execution when those primitives are unavailable.
+execution when those primitives are unavailable. Atomic `move`/`rename` additionally require a
+Linux filesystem exposing `renameat2(RENAME_NOREPLACE)`; an unsupported host fails closed instead
+of risking destination replacement.
 
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
 Cookie-Editor list and a Playwright storage-state object are accepted.
@@ -107,8 +117,8 @@ exhausted session can be resumed with explicit approval:
   --non-interactive
 ```
 
-If a non-empty overwrite is waiting for destructive approval, resume the exact stored action
-with `--approve-pending` or `--deny-pending`. Neither flag approves future actions:
+If a non-empty overwrite or deletion is waiting for destructive approval, resume the exact stored
+action with `--approve-pending` or `--deny-pending`. Neither flag approves future actions:
 
 ```bash
 .venv/bin/swoon agent \
@@ -118,10 +128,11 @@ with `--approve-pending` or `--deny-pending`. Neither flag approves future actio
   --non-interactive
 ```
 
-The agent can copy and modify output files, run offline foreground verification, and supervise
-bounded offline background jobs. Command workspaces are disposable: builds, formatter edits, and
-other command-side changes are discarded. It still cannot delete persistent files, install
-packages, mutate Git, expose a network service, or access the network.
+The agent can copy, modify, move, rename, chmod, and—after a real-human decision—delete output
+files, run offline foreground verification, and supervise bounded offline background jobs.
+Command workspaces are disposable: builds, formatter edits, and other command-side changes are
+discarded. It still cannot install packages, mutate Git, expose a network service, or access the
+network.
 
 ## Browser relay
 
@@ -206,9 +217,10 @@ If a step limit is reached, only a later human-side call with `additional_steps=
 it. See the orchestration guide for pause/resume examples and exact failure semantics.
 
 The `swoon agent` command instead opts into `AgentToolDispatcher` and `AgentOrchestrator`, using
-one capability-derived prompt/validator allowlist for the seven reads, six filesystem mutations,
-four disposable foreground tools, and three supervised background tools. See the filesystem,
-foreground-command, and background-command guides for the embedding API and safety boundaries.
+one capability-derived prompt/validator allowlist for the seven reads, eleven filesystem
+mutations, four disposable foreground tools, and three supervised background tools. See the
+filesystem, lifecycle, foreground-command, and background-command guides for the embedding API
+and safety boundaries.
 
 ## Documentation
 
@@ -222,6 +234,7 @@ foreground-command, and background-command guides for the embedding API and safe
 - `docs/filesystem-mutations.md` — Phase 11 write boundary and confirmation lifecycle
 - `docs/foreground-commands.md` — Phase 12 offline foreground execution boundary
 - `docs/background-commands.md` — Phase 13 supervised background lifecycle
+- `docs/filesystem-lifecycle.md` — Phase 14 guarded delete/move/rename/chmod boundary
 - `MIGRATION.md` — original relay history
 
 ## Tests

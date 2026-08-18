@@ -488,6 +488,66 @@ class CLITests(unittest.TestCase):
         self.assertIn('<result id="overwrite1">', second_browser.prompts[0])
         self.assertEqual(second_stderr, "")
 
+    def test_non_interactive_delete_confirmation_resumes_exact_action(self) -> None:
+        session_id = "sess_cli_delete_confirmation"
+        manager = SessionManager(self.sessions)
+        session = manager.create(session_id=session_id)
+        target = session.paths.host_output / "obsolete.txt"
+        target.write_text("obsolete", encoding="utf-8")
+        first_browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    '<action id="delete1"><tool>delete-file</tool>'
+                    '<path>obsolete.txt</path><expect_confirm>true</expect_confirm>'
+                    "</action><next>await_result</next></aeml>"
+                )
+            ]
+        )
+
+        first_code, _, first_stderr = self.invoke(
+            self.agent_args(
+                "--resume",
+                session_id,
+                "--prompt",
+                "Delete obsolete.txt",
+                "--non-interactive",
+            ),
+            first_browser,
+        )
+
+        waiting = manager.load(session_id)
+        self.assertEqual(first_code, EXIT_INPUT_REQUIRED)
+        self.assertEqual(waiting.state.pending_confirmation.action.tool, "delete-file")
+        self.assertTrue(target.is_file())
+        self.assertIn("approval or denial", first_stderr)
+
+        second_browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    "<complete>Approved deletion complete.</complete></aeml>"
+                )
+            ]
+        )
+        second_code, second_stdout, second_stderr = self.invoke(
+            self.agent_args(
+                "--resume",
+                session_id,
+                "--approve-pending",
+                "--non-interactive",
+            ),
+            second_browser,
+        )
+
+        completed = manager.load(session_id)
+        self.assertEqual(second_code, EXIT_SUCCESS)
+        self.assertIsNone(completed.state.pending_confirmation)
+        self.assertFalse(target.exists())
+        self.assertIn("Approved deletion complete.", second_stdout)
+        self.assertIn('<result id="delete1">', second_browser.prompts[0])
+        self.assertEqual(second_stderr, "")
+
     def test_interactive_denial_keeps_original_file(self) -> None:
         session_id = "sess_cli_denial"
         manager = SessionManager(self.sessions)

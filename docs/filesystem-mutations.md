@@ -1,7 +1,7 @@
 # Output filesystem mutations
 
-Phase 11 adds the first writable AEML boundary. `AgentToolDispatcher` exposes the seven
-read-only tools plus six filesystem mutations:
+Phase 11 added the first writable AEML boundary. `AgentToolDispatcher` now exposes the seven
+read-only tools plus eleven filesystem mutations. Its six content/copy tools are:
 
 - `create-file`
 - `overwrite-file`
@@ -10,11 +10,11 @@ read-only tools plus six filesystem mutations:
 - `copy-file`
 - `copy-dir`
 
-All destinations are under the current session's output root. Input remains read-only, and
-delete, move, rename, chmod, package changes, and Git mutations remain disabled. Phase 12 adds
-command/build/test/linter execution through a separate disposable sandbox; those commands cannot
-persist filesystem changes or bypass these mutation rules. Phase 13 background commands retain
-that disposable sandbox only while supervised and have the same non-persistence rule.
+Phase 14 adds `delete-file`, `delete-dir`, `move`, `rename`, and `chmod` through the same output
+boundary; see [Persistent filesystem lifecycle](filesystem-lifecycle.md). Input remains read-only,
+and package changes and Git mutations remain disabled. Phase 12 command/build/test/linter
+execution and Phase 13 background commands use separate disposable sandboxes; they cannot persist
+filesystem changes or bypass these mutation rules.
 
 ## Operation semantics
 
@@ -50,9 +50,10 @@ crash during a multi-file directory copy can still leave an incomplete destinati
 single-file replacement, an entire directory tree cannot be committed atomically on every
 supported filesystem. No successful action result is persisted in that case.
 
-## Destructive overwrite confirmation
+## Destructive confirmation
 
-Replacing a non-empty file requires two independent signals:
+Replacing a non-empty file requires two independent signals. Phase 14 deletion uses the same
+persisted decision lifecycle and always requires both signals:
 
 1. AEML must declare `<expect_confirm>true</expect_confirm>`.
 2. The embedding host must approve the persisted action through `confirmation=True` or the CLI.
@@ -60,9 +61,9 @@ Replacing a non-empty file requires two independent signals:
 The session stores the exact raw action, reserved action ID, reason, timestamp, and an opaque
 guard derived from the target's identity, metadata, and content hash. Status becomes
 `waiting_user`. Approval can therefore occur in another process without trusting the model to
-repeat the action. If the target changes while waiting, approval returns
-`confirmation_stale` and nothing is overwritten. A denial records a failure result and leaves
-the file untouched.
+repeat the action. If the target changes while waiting, approval returns `confirmation_stale` and
+nothing is overwritten or deleted. A denial records a failure result and leaves the target
+untouched.
 
 ```python
 outcome = agent.run(session, "Update the configuration")
@@ -86,8 +87,10 @@ session or a resumed session without a pending action.
 `create-file` or `overwrite-file` can start a sequence with `seq="1"`. An unfinished sequence
 must continue on the same path through `append-file` with the exact next sequence. The file,
 chunk advancement, and successful action result are committed to session state together after
-the filesystem operation. Reads, edits, copies, dependency inspection, and Git diffs that
-depend on an unfinished output are blocked with `write_incomplete` until `final="true"`.
+the filesystem operation. Reads, edits, copies, lifecycle changes, dependency inspection, and Git
+diffs that depend on an unfinished output are blocked with `write_incomplete` until `final="true"`.
+Successful Phase 14 moves remap finalized chunk paths; successful deletions remove records under
+the deleted scope.
 
 ## APIs
 

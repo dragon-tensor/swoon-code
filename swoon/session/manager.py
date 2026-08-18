@@ -299,6 +299,9 @@ class SessionManager:
         chunk_path: PathRef | None = None,
         chunk_seq: int | None = None,
         chunk_final: bool | None = None,
+        chunk_remove_scope: PathRef | None = None,
+        chunk_move_from: PathRef | None = None,
+        chunk_move_to: PathRef | None = None,
         resolve_confirmation: bool = False,
         process_handle: str | None = None,
         process_output_offset: int | None = None,
@@ -334,6 +337,29 @@ class SessionManager:
                 raise SessionError(
                     "chunk_sequence_error",
                     "Chunk result metadata must be supplied together",
+                )
+        lifecycle_values = (chunk_remove_scope, chunk_move_from, chunk_move_to)
+        if chunk_remove_scope is not None and any(
+            value is not None for value in (chunk_move_from, chunk_move_to)
+        ):
+            raise SessionError(
+                "invalid_action_record",
+                "Chunk removal and relocation metadata are mutually exclusive",
+            )
+        if (chunk_move_from is None) != (chunk_move_to is None):
+            raise SessionError(
+                "invalid_action_record",
+                "Chunk relocation metadata must be supplied together",
+            )
+        for value in lifecycle_values:
+            if value is not None and (
+                not isinstance(value, PathRef)
+                or value.root is not Root.OUTPUT
+                or not value.value.strip()
+            ):
+                raise SessionError(
+                    "invalid_action_record",
+                    "Lifecycle chunk metadata requires output paths",
                 )
         if type(resolve_confirmation) is not bool:
             raise SessionError(
@@ -398,6 +424,15 @@ class SessionManager:
                     chunk_path,
                     seq=chunk_seq,
                     final=chunk_final,
+                )
+            if chunk_remove_scope is not None:
+                state = self._state_without_chunk_scope(state, chunk_remove_scope)
+            elif chunk_move_from is not None:
+                assert chunk_move_to is not None
+                state = self._state_with_moved_chunk_scope(
+                    state,
+                    chunk_move_from,
+                    chunk_move_to,
                 )
             if process_handle is not None:
                 assert process_output_offset is not None
@@ -568,6 +603,61 @@ class SessionManager:
         )
         chunks = tuple(replacement if item.path == path else item for item in state.chunks)
         return replace(state, chunks=chunks)
+
+    @staticmethod
+    def _state_without_chunk_scope(
+        state: SessionState,
+        scope: PathRef,
+    ) -> SessionState:
+        scope_parts = SessionManager._chunk_path_parts(scope)
+        chunks = tuple(
+            record
+            for record in state.chunks
+            if not (
+                record.path.root is scope.root
+                and SessionManager._chunk_path_parts(record.path)[: len(scope_parts)]
+                == scope_parts
+            )
+        )
+        return replace(state, chunks=chunks)
+
+    def _state_with_moved_chunk_scope(
+        self,
+        state: SessionState,
+        source: PathRef,
+        target: PathRef,
+    ) -> SessionState:
+        source_parts = self._chunk_path_parts(source)
+        target_parts = self._chunk_path_parts(target)
+        chunks: list[ChunkRecord] = []
+        for record in state.chunks:
+            record_parts = self._chunk_path_parts(record.path)
+            if (
+                record.path.root is source.root
+                and record_parts[: len(source_parts)] == source_parts
+            ):
+                suffix = record_parts[len(source_parts) :]
+                moved_value = "/".join(target_parts + suffix) or "."
+                chunks.append(
+                    replace(
+                        record,
+                        path=PathRef(moved_value, target.root),
+                        updated_at=self._now(),
+                    )
+                )
+            else:
+                chunks.append(record)
+        keys = tuple((record.path.root, record.path.value) for record in chunks)
+        if len(keys) != len(set(keys)):
+            raise SessionError(
+                "chunk_state_conflict",
+                "Move destination conflicts with existing chunk metadata",
+            )
+        return replace(state, chunks=tuple(chunks))
+
+    @staticmethod
+    def _chunk_path_parts(path: PathRef) -> tuple[str, ...]:
+        return () if path.value == "." else tuple(path.value.split("/"))
 
     def register_process(
         self,

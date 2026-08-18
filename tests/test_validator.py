@@ -134,6 +134,24 @@ class AEMLValidatorTests(unittest.TestCase):
         )
         self.assertTrue(validated.actions[0].source.expect_confirm)
 
+    def test_chmod_accepts_only_owner_private_file_modes(self) -> None:
+        for mode in ("600", "0600", "700", "0700"):
+            with self.subTest(mode=mode):
+                validated = self.validate(
+                    '<action id="a1"><tool>chmod</tool><path>x</path>'
+                    f"<args><mode>{mode}</mode></args></action>"
+                    "<next>await_result</next>"
+                )
+                self.assertEqual(validated.actions[0].argument("mode"), mode)
+        for mode in ("644", "777", "400", "00600"):
+            with self.subTest(mode=mode):
+                self.assert_code(
+                    "invalid_argument",
+                    '<action id="a1"><tool>chmod</tool><path>x</path>'
+                    f"<args><mode>{mode}</mode></args></action>"
+                    "<next>await_result</next>",
+                )
+
     def test_non_complete_turn_requires_next(self) -> None:
         self.assert_code("missing_next", '<say>Working</say>')
 

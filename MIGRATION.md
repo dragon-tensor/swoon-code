@@ -6,9 +6,11 @@
 
 ## Project overview
 
-A command-line chatbot that relays messages to ChatGPT via a headless Playwright browser. Uses your own session cookies — no API key, no OpenAI billing.
+A historical command-line experiment that relayed messages through a user-provided browser
+session. This is not the current product description or a claim that browser automation is
+permitted; see `README.md`, `RESPONSIBLE_USE.md`, and `docs/supported-scope.md`.
 
-**Target:** Terminal users who want ChatGPT without paying or using the web UI.
+**Historical target:** Terminal-based exploration of a browser relay before AEML was restored.
 
 ---
 
@@ -80,10 +82,8 @@ python3 -m venv .venv
 .venv/bin/pip install playwright
 .venv/bin/python -m playwright install chromium
 
-# 2. Export cookies
-#    - Log into chatgpt.com in Chrome/Firefox
-#    - Install Cookie-Editor extension
-#    - Export as JSON → save as cookies.json
+# 2. Supply a private, authorized browser storage-state file.
+#    Current credential requirements are documented in README.md.
 ```
 
 ---
@@ -105,7 +105,8 @@ python3 -m venv .venv
 
 ## Shell wrapper (`chatgpt.sh`)
 
-Currently points to `/tmp/chatgpt-venv` — **needs updating** before it can be used. Fix:
+At that historical snapshot it pointed to `/tmp/chatgpt-venv`; the current wrapper already uses
+the repository-local environment. The old fix was:
 
 ```bash
 # Line 4 — change path to local .venv
@@ -116,27 +117,24 @@ VENV="$(dirname "$0")/.venv"
 
 ## Cookies
 
-The app needs 4 cookies exported from an authenticated ChatGPT session:
-
-| Cookie name | Domain |
-|---|---|
-| `f_clearance` | `.openai.com` |
-| `oai-client-auth-info` | `.openai.com` |
-| `unified_session_manifest` | `.chat.openai.com` |
-| `usc_*` | `.chat.openai.com` |
+The original prototype depended on a set of site-specific cookies. Their names and domains are
+intentionally not retained as current setup advice: hosted interfaces and authentication details
+change, and storage state is an account credential. Follow the current private-file and provider
+authorization guidance instead.
 
 **Session lifespan:** Unknown — varies. When expired, you'll see:
 - `"Redirected to login. Refresh cookies from chatgpt.com."`
-- A debug screenshot saved to `/tmp/chatgpt_debug.png`
+- A debug screenshot saved to a fixed temporary path (removed by the current private opt-in flow)
 
-**Auto-save:** On close, the app saves Playwright's storage state to `cookies.json.state` (not used for login, but may contain refreshed cookies).
+**Historical auto-save:** The prototype saved refreshed state automatically. Current Swoon
+disables this by default and requires `--save-storage-state PATH` with private storage.
 
 ---
 
 ## Git history
 
 ```
-cfd2c36  strip agent layers, revert to pure terminal chatbot    ← CURRENT
+cfd2c36  strip agent layers, revert to pure terminal chatbot    ← THEN CURRENT
 20e3133  debug attemot 1                                          ← previous: full agent version
 8a277f7  working interactive terminal
 fcd34f6  First working prototype.
@@ -161,11 +159,14 @@ The commit `cfd2c36` stripped ~312 lines of agent functionality:
 - **Renamed:** `ChatGPTAgent` → `ChatGPT`
 - **Simplified:** `main()` now calls `client.send()` directly instead of `agent.run_agent()`
 
-Nothing in the current version is agentic. It is a thin relay.
+Nothing in that historical snapshot was agentic. The current package contains the bounded AEML
+agent described in `README.md`.
 
 ---
 
-## Possible improvements / known issues
+## Historical improvements / known issues
+
+This list records the old relay's gaps; several are resolved by the current package.
 
 1. **Shell script path** — `chatgpt.sh` references `/tmp/chatgpt-venv`; needs updating to local `.venv`
 2. **No `--headed` flag** — browser always runs headless; add for debugging
@@ -180,7 +181,7 @@ Nothing in the current version is agentic. It is a thin relay.
 
 ## Key contacts / context
 
-- **Author:** dragon-tensor (dragon.tensor@gmail.com)
+- **Project history:** maintained in Git; personal contact details are not runtime documentation
 - **Language:** Python 3
-- **Original intent:** Experiment to access ChatGPT without paying for API
+- **Original intent:** Experiment with a terminal browser relay
 - **Evolution:** Started as simple relay → became a full coding agent → stripped back to simple relay

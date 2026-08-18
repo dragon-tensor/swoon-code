@@ -70,6 +70,9 @@ pending-confirmation shape.
 
 `SessionManager` currently provides:
 
+- `list_session_ids`
+- `export_output`
+- `delete_session`
 - `advance_step`
 - `extend_step_limit`
 - `set_plan`
@@ -81,6 +84,12 @@ pending-confirmation shape.
 - `clear_pending_confirmation`
 - `register_process`
 - `update_process`
+
+The three human-side lifecycle methods do not expand AEML's tool registry. Export accepts only a
+new destination outside session storage and only terminal state, reusing bounded safe-copy rules.
+Deletion validates the exact session layout, refuses recorded running processes, and requires
+terminal state unless the human-facing caller supplies a separate force decision. The CLI adds its
+own deletion confirmation before calling this API.
 
 `reserve_action_ids` is called before dispatch, so an attempted action ID cannot be reused after
 a tool failure or process restart. `extend_step_limit` succeeds only while the session is

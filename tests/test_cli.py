@@ -186,6 +186,119 @@ class CLITests(unittest.TestCase):
         self.assertIn("[fail] Cookie file", stdout)
         self.assertIn("Consumer check failed", stderr)
 
+    def test_session_commands_list_show_export_and_delete_completed_output(self) -> None:
+        manager = SessionManager(self.sessions)
+        session = manager.create(session_id="sess_cli_management")
+        (session.paths.host_output / "result.txt").write_text("ready\n", encoding="utf-8")
+        manager.set_status(session, SessionStatus.COMPLETED)
+        browser = FakeBrowserTransport([])
+
+        code, stdout, stderr = self.invoke(
+            ["session", "list", "--session-dir", str(self.sessions)],
+            browser,
+        )
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn("sess_cli_management\tcompleted", stdout)
+        self.assertEqual(stderr, "")
+
+        code, stdout, stderr = self.invoke(
+            [
+                "session",
+                "show",
+                session.id,
+                "--session-dir",
+                str(self.sessions),
+            ],
+            browser,
+        )
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn(f"Output: {session.paths.host_output}", stdout)
+        self.assertIn("Status: completed", stdout)
+        self.assertEqual(stderr, "")
+
+        destination = self.root / "consumer-export"
+        code, stdout, stderr = self.invoke(
+            [
+                "session",
+                "export",
+                session.id,
+                str(destination),
+                "--session-dir",
+                str(self.sessions),
+            ],
+            browser,
+        )
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertEqual((destination / "result.txt").read_text(encoding="utf-8"), "ready\n")
+        self.assertIn("Exported sess_cli_management", stdout)
+        self.assertEqual(stderr, "")
+
+        code, stdout, stderr = self.invoke(
+            [
+                "session",
+                "delete",
+                session.id,
+                "--session-dir",
+                str(self.sessions),
+                "--yes",
+            ],
+            browser,
+        )
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn("Deleted session sess_cli_management", stdout)
+        self.assertEqual(stderr, "")
+        self.assertFalse(session.paths.host_root.exists())
+
+    def test_session_delete_is_guarded_and_active_state_requires_force(self) -> None:
+        session = SessionManager(self.sessions).create(session_id="sess_cli_active_delete")
+        browser = FakeBrowserTransport([])
+
+        code, stdout, stderr = self.invoke(
+            [
+                "session",
+                "delete",
+                session.id,
+                "--session-dir",
+                str(self.sessions),
+            ],
+            browser,
+            inputs=["no"],
+        )
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn("cancelled", stdout)
+        self.assertEqual(stderr, "")
+        self.assertTrue(session.paths.host_root.exists())
+
+        code, _, stderr = self.invoke(
+            [
+                "session",
+                "delete",
+                session.id,
+                "--session-dir",
+                str(self.sessions),
+                "--yes",
+            ],
+            browser,
+        )
+        self.assertEqual(code, EXIT_RUNTIME_ERROR)
+        self.assertIn("session_not_terminal", stderr)
+
+        code, stdout, stderr = self.invoke(
+            [
+                "session",
+                "delete",
+                session.id,
+                "--session-dir",
+                str(self.sessions),
+                "--yes",
+                "--force-active",
+            ],
+            browser,
+        )
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn("Deleted session", stdout)
+        self.assertEqual(stderr, "")
+
     def test_agent_creates_a_session_and_completes(self) -> None:
         session_id = "sess_cli_complete"
         browser = FakeBrowserTransport(
@@ -212,6 +325,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(session.state.status, SessionStatus.COMPLETED)
         self.assertEqual(session.state.step, 1)
         self.assertIn(f"Session: {session_id}", stdout)
+        self.assertIn(f"Output: {session.paths.host_output}", stdout)
         self.assertIn("Inspection complete.", stdout)
         self.assertEqual(stderr, "")
         self.assertTrue(browser.closed)

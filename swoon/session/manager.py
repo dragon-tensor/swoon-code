@@ -151,6 +151,100 @@ class SessionManager:
             )
         return Session(paths=paths, state=state)
 
+    def list_session_ids(self) -> tuple[str, ...]:
+        """Return deterministic candidate session IDs without trusting their contents."""
+
+        identifiers: list[str] = []
+        try:
+            entries = os.scandir(self.base_dir)
+        except OSError as error:
+            raise SessionError("session_list_failed", "Could not list session storage") from error
+        with entries:
+            for entry in entries:
+                try:
+                    validate_session_id(entry.name)
+                except SessionError:
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        identifiers.append(entry.name)
+                except OSError:
+                    identifiers.append(entry.name)
+        return tuple(sorted(identifiers))
+
+    def export_output(self, session_id: str, destination: str | Path) -> Path:
+        """Copy one terminal session's output to a new user-selected directory."""
+
+        paths = self.paths(session_id)
+        self.load(session_id)
+        target = self._resolved_missing_destination(destination)
+        self._validate_export_destination(paths, target)
+        with self._exclusive_lock(paths.lock_file):
+            self._validate_layout(paths)
+            state = self._read_state(paths.state_file)
+            if state.session_id != session_id:
+                raise SessionError(
+                    "session_integrity_error",
+                    "Session state ID does not match its directory",
+                )
+            if state.status not in {SessionStatus.COMPLETED, SessionStatus.ABORTED}:
+                raise SessionError(
+                    "session_not_terminal",
+                    "Only completed or aborted sessions can be exported",
+                )
+            target.mkdir(mode=0o700)
+            try:
+                self._copy_project(paths.host_output, target)
+            except Exception:
+                self._remove_failed_layout(target)
+                raise
+        self._fsync_directory(target.parent)
+        return target
+
+    def delete_session(self, session_id: str, *, force_active: bool = False) -> None:
+        """Delete one exact session after validation, refusing live work by default."""
+
+        if type(force_active) is not bool:
+            raise TypeError("force_active must be boolean")
+        paths = self.paths(session_id)
+        self.load(session_id)
+        tombstone = self.base_dir / f".delete-{session_id}-{secrets.token_hex(8)}"
+        moved = False
+        with self._exclusive_lock(paths.lock_file):
+            self._validate_layout(paths)
+            state = self._read_state(paths.state_file)
+            if state.session_id != session_id:
+                raise SessionError(
+                    "session_integrity_error",
+                    "Session state ID does not match its directory",
+                )
+            if any(process.status is ProcessStatus.RUNNING for process in state.processes):
+                raise SessionError(
+                    "session_process_running",
+                    "A session with recorded running work cannot be deleted",
+                )
+            if (
+                state.status not in {SessionStatus.COMPLETED, SessionStatus.ABORTED}
+                and not force_active
+            ):
+                raise SessionError(
+                    "session_not_terminal",
+                    "Abort or complete the session before deletion, or explicitly force it",
+                )
+            if os.name != "nt":
+                os.replace(paths.host_root, tombstone)
+                moved = True
+        if not moved:
+            os.replace(paths.host_root, tombstone)
+        try:
+            self._remove_failed_layout(tombstone)
+            self._fsync_directory(self.base_dir)
+        except OSError as error:
+            raise SessionError(
+                "session_delete_failed",
+                f"Session was isolated at {tombstone.name!r} but cleanup failed",
+            ) from error
+
     def paths(self, session_id: str) -> SessionPaths:
         validate_session_id(session_id)
         host_root = self.base_dir / session_id
@@ -162,6 +256,45 @@ class SessionManager:
             state_file=host_root / "state.json",
             lock_file=host_root / ".lock",
         )
+
+    def _validate_export_destination(
+        self,
+        paths: SessionPaths,
+        target: Path,
+    ) -> None:
+        for protected in (paths.host_root, self.base_dir):
+            try:
+                target.relative_to(protected.resolve(strict=True))
+            except ValueError:
+                continue
+            raise SessionError(
+                "invalid_export_destination",
+                "Session output cannot be exported inside session storage",
+            )
+
+    @staticmethod
+    def _resolved_missing_destination(destination: str | Path) -> Path:
+        candidate = Path(destination).expanduser()
+        if not candidate.name:
+            raise SessionError("invalid_export_destination", "Export destination is invalid")
+        if candidate.exists() or candidate.is_symlink():
+            raise SessionError(
+                "export_destination_exists",
+                "Export destination must not already exist",
+            )
+        try:
+            parent = candidate.parent.resolve(strict=True)
+        except OSError as error:
+            raise SessionError(
+                "invalid_export_destination",
+                "Export destination parent does not exist",
+            ) from error
+        if not parent.is_dir():
+            raise SessionError(
+                "invalid_export_destination",
+                "Export destination parent is not a directory",
+            )
+        return parent / candidate.name
 
     def advance_step(self, session: Session) -> Session:
         def mutate(state: SessionState) -> SessionState:

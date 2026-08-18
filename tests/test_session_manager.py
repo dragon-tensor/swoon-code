@@ -103,6 +103,83 @@ class SessionManagerTests(unittest.TestCase):
                 0o500,
             )
 
+    def test_session_listing_returns_only_candidate_directories_in_order(self) -> None:
+        self.manager.create(session_id="sess_zulu")
+        self.manager.create(session_id="sess_alpha")
+        (self.sessions / "unrelated").mkdir()
+        (self.sessions / "sess_file").write_text("not a directory", encoding="utf-8")
+
+        self.assertEqual(
+            self.manager.list_session_ids(),
+            ("sess_alpha", "sess_zulu"),
+        )
+
+    def test_terminal_output_exports_to_a_new_private_tree(self) -> None:
+        session = self.manager.create(session_id="sess_export")
+        nested = session.paths.host_output / "bin"
+        nested.mkdir(mode=0o700)
+        executable = nested / "run"
+        executable.write_bytes(b"#!/bin/sh\n")
+        executable.chmod(0o700)
+        (session.paths.host_output / "data.bin").write_bytes(b"\x00\xff")
+        self.manager.set_status(session, SessionStatus.COMPLETED)
+        destination = self.root / "exported"
+
+        exported = self.manager.export_output(session.id, destination)
+
+        self.assertEqual(exported, destination)
+        self.assertEqual((exported / "data.bin").read_bytes(), b"\x00\xff")
+        self.assertEqual((exported / "bin" / "run").read_bytes(), b"#!/bin/sh\n")
+        if os.name != "nt":
+            self.assertEqual(stat.S_IMODE(exported.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE((exported / "data.bin").stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE((exported / "bin" / "run").stat().st_mode), 0o700)
+
+        with self.assertRaisesRegex(SessionError, "must not already exist"):
+            self.manager.export_output(session.id, destination)
+
+    def test_output_export_refuses_active_sessions_unsafe_entries_and_session_storage(self) -> None:
+        active = self.manager.create(session_id="sess_active_export")
+        with self.assertRaisesRegex(SessionError, "completed or aborted"):
+            self.manager.export_output(active.id, self.root / "active-export")
+
+        self.manager.set_status(active, SessionStatus.ABORTED)
+        with self.assertRaisesRegex(SessionError, "inside session storage"):
+            self.manager.export_output(active.id, self.sessions / "nested-export")
+
+        if hasattr(os, "symlink"):
+            outside = self.root / "outside"
+            outside.write_text("secret", encoding="utf-8")
+            (active.paths.host_output / "unsafe").symlink_to(outside)
+            destination = self.root / "unsafe-export"
+            with self.assertRaisesRegex(SessionImportError, "Symbolic links"):
+                self.manager.export_output(active.id, destination)
+            self.assertFalse(destination.exists())
+
+    def test_session_deletion_requires_terminal_state_and_removes_exact_tree(self) -> None:
+        active = self.manager.create(session_id="sess_delete_active")
+        with self.assertRaisesRegex(SessionError, "before deletion"):
+            self.manager.delete_session(active.id)
+        self.assertTrue(active.paths.host_root.is_dir())
+
+        self.manager.delete_session(active.id, force_active=True)
+        self.assertFalse(active.paths.host_root.exists())
+        self.assertFalse(any(self.sessions.glob(".delete-sess_delete_active-*")))
+
+        terminal = self.manager.create(session_id="sess_delete_done")
+        self.manager.set_status(terminal, SessionStatus.COMPLETED)
+        self.manager.delete_session(terminal.id)
+        self.assertFalse(terminal.paths.host_root.exists())
+
+    def test_session_deletion_refuses_a_recorded_running_process_even_when_forced(self) -> None:
+        session = self.manager.create(session_id="sess_delete_running")
+        self.manager.register_process(session, pid=1234, handle="proc_running")
+
+        with self.assertRaisesRegex(SessionError, "running work"):
+            self.manager.delete_session(session.id, force_active=True)
+
+        self.assertTrue(session.paths.host_root.exists())
+
     @unittest.skipUnless(hasattr(os, "symlink"), "symbolic links unavailable")
     def test_project_import_rejects_symlinks_and_removes_partial_session(self) -> None:
         source = self.root / "project"

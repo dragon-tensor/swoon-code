@@ -36,7 +36,7 @@ EXIT_RUNTIME_ERROR = 5
 EXIT_INPUT_REQUIRED = 6
 EXIT_INTERRUPTED = 130
 
-_COMMANDS = frozenset({"chat", "agent", "doctor"})
+_COMMANDS = frozenset({"chat", "agent", "doctor", "session"})
 _ABORT_COMMANDS = frozenset({"/abort", "/quit"})
 
 
@@ -66,6 +66,48 @@ def build_parser() -> argparse.ArgumentParser:
         help="also launch and close Chromium instead of checking installation only",
     )
     doctor.set_defaults(handler=_run_doctor)
+
+    session_command = commands.add_parser(
+        "session",
+        help="inspect, export, and remove persisted sessions",
+    )
+    session_actions = session_command.add_subparsers(
+        dest="session_action",
+        metavar="ACTION",
+        required=True,
+    )
+    session_list = session_actions.add_parser("list", help="list persisted sessions")
+    _add_session_directory_argument(session_list)
+    session_list.set_defaults(handler=_run_session_list)
+
+    session_show = session_actions.add_parser("show", help="show one session")
+    session_show.add_argument("session_id", metavar="SESSION_ID")
+    _add_session_directory_argument(session_show)
+    session_show.set_defaults(handler=_run_session_show)
+
+    session_export = session_actions.add_parser(
+        "export",
+        help="copy terminal-session output to a new directory",
+    )
+    session_export.add_argument("session_id", metavar="SESSION_ID")
+    session_export.add_argument("destination", metavar="DESTINATION")
+    _add_session_directory_argument(session_export)
+    session_export.set_defaults(handler=_run_session_export)
+
+    session_delete = session_actions.add_parser("delete", help="delete one persisted session")
+    session_delete.add_argument("session_id", metavar="SESSION_ID")
+    session_delete.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm deletion without an interactive prompt",
+    )
+    session_delete.add_argument(
+        "--force-active",
+        action="store_true",
+        help="allow deletion of non-terminal state when no process is recorded running",
+    )
+    _add_session_directory_argument(session_delete)
+    session_delete.set_defaults(handler=_run_session_delete)
 
     chat = commands.add_parser("chat", help="run the direct ChatGPT terminal relay")
     _add_browser_arguments(chat)
@@ -123,6 +165,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     agent.set_defaults(handler=_run_agent)
     return parser
+
+
+def _add_session_directory_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--session-dir",
+        help="physical session storage directory (defaults to the private app data directory)",
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -184,6 +233,92 @@ def _run_doctor(args: argparse.Namespace) -> int:
     print("Consumer CLI is ready.")
     if not sandbox_ready:
         print("File/read agent tools work, but command execution will fail closed.")
+    return EXIT_SUCCESS
+
+
+def _run_session_list(args: argparse.Namespace) -> int:
+    try:
+        manager = SessionManager(args.session_dir)
+        identifiers = manager.list_session_ids()
+    except Exception as error:
+        _report_error(error)
+        return EXIT_RUNTIME_ERROR
+    if not identifiers:
+        print("No sessions found.")
+        return EXIT_SUCCESS
+
+    failures = False
+    print("SESSION\tSTATUS\tSTEPS\tUPDATED")
+    for identifier in identifiers:
+        try:
+            session = manager.load(identifier)
+        except Exception as error:
+            failures = True
+            code = getattr(error, "code", error.__class__.__name__)
+            print(f"{identifier}\tERROR:{code}\t-\t-", file=sys.stderr)
+            continue
+        print(
+            f"{session.id}\t{session.state.status.value}\t"
+            f"{session.state.step}/{session.state.max_steps}\t"
+            f"{session.state.updated_at.isoformat()}"
+        )
+    return EXIT_RUNTIME_ERROR if failures else EXIT_SUCCESS
+
+
+def _run_session_show(args: argparse.Namespace) -> int:
+    try:
+        session = SessionManager(args.session_dir).load(args.session_id)
+    except Exception as error:
+        _report_error(error)
+        return EXIT_RUNTIME_ERROR
+    pending = session.state.pending_confirmation
+    print(f"Session: {session.id}")
+    print(f"Status: {session.state.status.value}")
+    print(f"Steps: {session.state.step}/{session.state.max_steps}")
+    print(f"Created: {session.state.created_at.isoformat()}")
+    print(f"Updated: {session.state.updated_at.isoformat()}")
+    print(f"Input: {session.paths.host_input}")
+    print(f"Output: {session.paths.host_output}")
+    print(f"Actions: {len(session.state.action_ledger)}")
+    print(f"Processes: {len(session.state.processes)}")
+    print(f"Pending confirmation: {pending.action.tool if pending is not None else 'none'}")
+    return EXIT_SUCCESS
+
+
+def _run_session_export(args: argparse.Namespace) -> int:
+    try:
+        destination = SessionManager(args.session_dir).export_output(
+            args.session_id,
+            args.destination,
+        )
+    except Exception as error:
+        _report_error(error)
+        return EXIT_RUNTIME_ERROR
+    print(f"Exported {args.session_id} output to {destination}")
+    return EXIT_SUCCESS
+
+
+def _run_session_delete(args: argparse.Namespace) -> int:
+    if not args.yes:
+        try:
+            decision = input(
+                f"Delete session {args.session_id!r} and all of its private data? [y/N]> "
+            ).strip().casefold()
+        except EOFError:
+            print("Input required: session deletion was not confirmed.", file=sys.stderr)
+            return EXIT_INPUT_REQUIRED
+        if decision not in {"y", "yes"}:
+            print("Session deletion cancelled.")
+            return EXIT_SUCCESS
+    try:
+        SessionManager(args.session_dir).delete_session(
+            args.session_id,
+            force_active=args.force_active,
+        )
+    except Exception as error:
+        _report_error(error)
+        return EXIT_RUNTIME_ERROR
+    print(f"Deleted session {args.session_id}.")
     return EXIT_SUCCESS
 
 
@@ -275,6 +410,7 @@ def _run_agent(args: argparse.Namespace) -> int:
 
     if session is not None:
         print(f"Session: {session.id}")
+        print(f"Output: {session.paths.host_output}")
         terminal = _terminal_session_exit(session)
         if terminal is not None:
             return terminal
@@ -349,6 +485,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             _report_error(error)
             return EXIT_RUNTIME_ERROR
         print(f"Session: {session.id}")
+        print(f"Output: {session.paths.host_output}")
 
     client = None
     try:

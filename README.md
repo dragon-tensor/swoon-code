@@ -39,6 +39,7 @@ Implemented foundations:
 16. Confirmed exact dependency declaration changes with atomic manifests and lockfile refusal
 17. Apache-2.0 licensing, responsible-use guidance, and legal metadata in release artifacts
 18. Owner-private browser credentials, opt-in debug artifacts, and an explicit supported scope
+19. Human-side session listing, output export, guarded cleanup, and consumer retention guidance
 
 The currently executable AEML tools are:
 
@@ -140,9 +141,10 @@ Create a session by importing an existing project as read-only input:
   --prompt "Copy this project to output and add a health endpoint."
 ```
 
-The command prints the session ID before starting the browser. If the agent asks a question or
-reaches its step limit, the default interactive mode reads the human answer or additional-step
-approval from the terminal. Resume a saved session with the same session storage directory:
+The command prints the session ID and private output path before starting the browser. If the agent
+asks a question or reaches its step limit, the default interactive mode reads the human answer or
+additional-step approval from the terminal. Resume a saved session with the same session storage
+directory:
 
 ```bash
 .venv/bin/swoon agent \
@@ -198,6 +200,7 @@ the network.
 ./chatgpt.sh --cookies cookies.json --headed -v -p "Hello"
 
 # Explicitly save refreshed credentials in an owner-private directory
+mkdir -p -m 700 "$HOME/.local/share/swoon-code"
 ./chatgpt.sh --cookies cookies.json \
   --save-storage-state "$HOME/.local/share/swoon-code/refreshed-state.json" \
   -p "Hello"
@@ -205,6 +208,27 @@ the network.
 
 The legacy `chatgpt_agent.py` entrypoint remains compatible. The browser implementation is
 `swoon.transport.ChatGPTWebTransport`.
+
+## Session results and cleanup
+
+The agent prints both its session ID and private physical output path. It never changes the
+original imported project. After a session is completed or aborted, inspect and export its output:
+
+```bash
+.venv/bin/swoon session list
+.venv/bin/swoon session show sess_EXAMPLE
+.venv/bin/swoon session export sess_EXAMPLE ./swoon-result
+```
+
+The export destination must not exist. Review the exported tree before applying it elsewhere.
+Remove retained session data with an exact, separately confirmed command:
+
+```bash
+.venv/bin/swoon session delete sess_EXAMPLE
+```
+
+See [Consumer session management](docs/session-cli.md) for custom storage, automation, active-state
+refusal, export validation, and retention behavior.
 
 ## AEML foundation API
 
@@ -301,6 +325,7 @@ additional restriction on the Apache-2.0 license.
 - `docs/consumer-testing.md` — Phase 15 wheel build, installation, doctor, and acceptance flow
 - `docs/dependency-changes.md` — Phase 16 exact declaration and lockfile safety boundary
 - `docs/supported-scope.md` — Phase 18 product, platform, and transport support boundary
+- `docs/session-cli.md` — Phase 19 human-side output export and retained-session management
 - `RESPONSIBLE_USE.md` — educational purpose, non-affiliation, and user responsibility
 - `MIGRATION.md` — original relay history
 

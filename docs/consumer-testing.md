@@ -103,6 +103,16 @@ session guide; the imported input stays sealed. File/read/lifecycle tools work i
 the command sandbox. Foreground/background command tools require the additional Linux runtime
 reported by `doctor` and fail closed when it is unavailable.
 
+After the session reaches a terminal state, exercise the normal consumer retrieval path:
+
+```bash
+swoon-consumer/bin/swoon session show sess_EXAMPLE
+swoon-consumer/bin/swoon session export sess_EXAMPLE ./accepted-output
+```
+
+Inspect `accepted-output`, then verify that the original test project is unchanged. Finally test
+retention cleanup with `swoon session delete sess_EXAMPLE` and its exact confirmation prompt.
+
 ## Release boundary
 
 The wheel is sufficient for local consumer testing and private distribution. A true single-file

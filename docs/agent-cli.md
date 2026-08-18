@@ -62,8 +62,10 @@ storage failures are reported rather than silently ignored.
 If `--prompt` is omitted, interactive mode asks for the initial task before creating a new
 session. `--non-interactive` instead requires `--prompt` and returns exit 6 if it is absent.
 
-The CLI prints `Session: sess_...` before browser startup. Keep that ID: browser or transport
-failures leave durable state that can be inspected or resumed.
+The CLI prints `Session: sess_...` and the human-side physical output path before browser startup.
+Keep the ID: browser or transport failures leave durable state that can be inspected or resumed.
+Use `swoon session show`, `swoon session export`, and `swoon session delete` as documented in
+`session-cli.md`; those commands do not start a browser.
 
 ## Human questions and step limits
 

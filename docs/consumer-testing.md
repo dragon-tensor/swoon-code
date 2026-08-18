@@ -45,9 +45,10 @@ dist/swoon_code-0.1.0-py3-none-any.whl
 ```
 
 The builder prints the artifact SHA-256. It validates that `pyproject.toml` and
-`swoon.__version__` agree, includes only the `swoon` package and wheel metadata, writes a complete
-hashed `RECORD`, and never packages cookies, tests, sessions, caches, or project source outside the
-runtime package.
+`swoon.__version__` agree, includes only the `swoon` package, wheel metadata, and declared legal
+files, writes a complete hashed `RECORD`, and never packages cookies, tests, sessions, caches, or
+other project source outside the runtime package. Core metadata identifies `Apache-2.0` and the
+wheel carries `LICENSE` and `NOTICE` under its standard `.dist-info/licenses/` directory.
 
 Run the networkless acceptance test:
 
@@ -104,5 +105,7 @@ sandbox requirements, and platform-specific files. A later release phase can pro
 or application bundle that manages Python and Chromium together without pretending they are one
 small binary.
 
-The repository does not currently declare a redistribution license. Choose and add a `LICENSE`
-before publishing the wheel publicly.
+The source and wheel are distributed under Apache-2.0. `RESPONSIBLE_USE.md` documents educational
+intent, non-affiliation, and user responsibility without changing the software license. Before a
+public release, review third-party dependency notices and confirm that the collective
+`Swoon Code contributors` attribution in `NOTICE` matches the ownership policy you want to use.

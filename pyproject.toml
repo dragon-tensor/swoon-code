@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=70"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "A browser-backed ChatGPT relay and bounded AEML agent"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "playwright>=1.50,<2",
 ]

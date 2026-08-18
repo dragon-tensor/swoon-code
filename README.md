@@ -6,7 +6,16 @@ performs only explicitly implemented capabilities.
 
 The web transport uses an authenticated ChatGPT browser session rather than an OpenAI API key.
 
-**Experimental / educational.** Automated access may violate OpenAI's terms of service.
+> [!IMPORTANT]
+> Swoon Code is an independent educational and research demonstration of AEML. It is not
+> affiliated with, sponsored by, or endorsed by OpenAI. Each user is responsible for ensuring
+> that their use complies with applicable law, account rules, and the terms of every connected
+> service. If a provider does not permit a particular automation method, do not use that method.
+
+The project is not intended to cause harm, facilitate violence or abuse, bypass safeguards or
+access controls, or evade provider restrictions. Educational intent does not override third-party
+terms. Read [Responsible use and project status](RESPONSIBLE_USE.md) before using the browser
+transport, and treat exported browser cookies as account credentials.
 
 ## Current status
 
@@ -28,6 +37,7 @@ Implemented foundations:
 14. Guarded output deletion, atomic relocation, and owner-private mode changes
 15. Offline wheel packaging, installed-entrypoint smoke testing, and consumer diagnostics
 16. Confirmed exact dependency declaration changes with atomic manifests and lockfile refusal
+17. Apache-2.0 licensing, responsible-use guidance, and legal metadata in release artifacts
 
 The currently executable AEML tools are:
 
@@ -246,9 +256,19 @@ it. See the orchestration guide for pause/resume examples and exact failure sema
 
 The `swoon agent` command instead opts into `AgentToolDispatcher` and `AgentOrchestrator`, using
 one capability-derived prompt/validator allowlist for the seven reads, eleven filesystem
-mutations, four disposable foreground tools, and three supervised background tools. See the
-filesystem, lifecycle, foreground-command, and background-command guides for the embedding API
-and safety boundaries.
+mutations, two guarded dependency mutations, four disposable foreground tools, and three
+supervised background tools. See the filesystem, lifecycle, dependency, foreground-command, and
+background-command guides for the embedding API and safety boundaries.
+
+## License
+
+Swoon Code is licensed under the [Apache License 2.0](LICENSE). The source distribution and wheel
+carry the SPDX identifier `Apache-2.0`, the complete license, and the project [NOTICE](NOTICE).
+Third-party products and dependencies remain subject to their own licenses and terms.
+
+The [responsible-use statement](RESPONSIBLE_USE.md) explains the project's educational purpose,
+independence, credential precautions, and user responsibility. It is guidance rather than an
+additional restriction on the Apache-2.0 license.
 
 ## Documentation
 
@@ -265,6 +285,7 @@ and safety boundaries.
 - `docs/filesystem-lifecycle.md` — Phase 14 guarded delete/move/rename/chmod boundary
 - `docs/consumer-testing.md` — Phase 15 wheel build, installation, doctor, and acceptance flow
 - `docs/dependency-changes.md` — Phase 16 exact declaration and lockfile safety boundary
+- `RESPONSIBLE_USE.md` — educational purpose, non-affiliation, and user responsibility
 - `MIGRATION.md` — original relay history
 
 ## Tests

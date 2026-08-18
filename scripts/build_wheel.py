@@ -44,7 +44,14 @@ def build_wheel(project_root: Path, output_directory: Path) -> Path:
     for source in _package_files(root / "swoon"):
         relative = source.relative_to(root).as_posix()
         payloads[relative] = source.read_bytes()
-    payloads[f"{dist_info}/METADATA"] = _metadata(project, root)
+    license_files = _license_files(project, root)
+    for relative, payload in license_files:
+        payloads[f"{dist_info}/licenses/{relative}"] = payload
+    payloads[f"{dist_info}/METADATA"] = _metadata(
+        project,
+        root,
+        tuple(relative for relative, _ in license_files),
+    )
     payloads[f"{dist_info}/WHEEL"] = (
         "Wheel-Version: 1.0\n"
         "Generator: swoon-offline-wheel-builder 1\n"
@@ -141,13 +148,26 @@ def _package_files(package_root: Path) -> tuple[Path, ...]:
     return tuple(sorted(files))
 
 
-def _metadata(project: dict[str, Any], root: Path) -> bytes:
+def _metadata(
+    project: dict[str, Any],
+    root: Path,
+    license_files: tuple[str, ...],
+) -> bytes:
     name = _required_text(project, "name")
     version = _required_text(project, "version")
     description = _required_text(project, "description")
     requires_python = _required_text(project, "requires-python")
     readme_name = _required_text(project, "readme")
     readme = _project_file(root, readme_name).read_text(encoding="utf-8")
+    license_expression = _required_text(project, "license")
+    if not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9.+-]*(?:\s+(?:AND|OR|WITH)\s+"
+        r"[A-Za-z0-9][A-Za-z0-9.+-]*)*",
+        license_expression,
+    ):
+        raise ValueError("project license must be a simple SPDX expression")
+    if not license_files:
+        raise ValueError("project must include at least one license file")
     dependencies = project.get("dependencies", [])
     if not isinstance(dependencies, list) or not all(
         isinstance(item, str)
@@ -158,15 +178,54 @@ def _metadata(project: dict[str, Any], root: Path) -> bytes:
     ):
         raise ValueError("project dependencies must be non-empty strings")
     lines = [
-        "Metadata-Version: 2.3",
+        "Metadata-Version: 2.4",
         f"Name: {name}",
         f"Version: {version}",
         f"Summary: {description}",
         f"Requires-Python: {requires_python}",
+        f"License-Expression: {license_expression}",
         "Description-Content-Type: text/markdown",
     ]
+    lines.extend(f"License-File: {name}" for name in license_files)
     lines.extend(f"Requires-Dist: {dependency}" for dependency in dependencies)
     return ("\n".join(lines) + "\n\n" + readme).encode("utf-8")
+
+
+def _license_files(
+    project: dict[str, Any],
+    root: Path,
+) -> tuple[tuple[str, bytes], ...]:
+    declared = project.get("license-files")
+    if not isinstance(declared, list) or not declared:
+        raise ValueError("project license-files must be a non-empty array")
+
+    selected: list[tuple[str, bytes]] = []
+    seen: set[str] = set()
+    for value in declared:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or "\n" in value
+            or "\r" in value
+            or "\\" in value
+            or any(character in value for character in "*?[]")
+        ):
+            raise ValueError(
+                "offline wheel builder requires literal POSIX license-file paths"
+            )
+        source = _project_file(root, value)
+        relative = source.relative_to(root).as_posix()
+        if relative in seen:
+            raise ValueError("project license-files contains a duplicate path")
+        try:
+            payload = source.read_bytes()
+            payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("Project license file must be UTF-8 text") from error
+        seen.add(relative)
+        selected.append((relative, payload))
+    return tuple(selected)
 
 
 def _entry_points(project: dict[str, Any]) -> bytes:

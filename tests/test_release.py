@@ -31,6 +31,29 @@ class ConsumerReleaseTests(unittest.TestCase):
             (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
         self.assertEqual(configuration["project"]["version"], swoon.__version__)
+        self.assertEqual(configuration["project"]["license"], "Apache-2.0")
+        self.assertEqual(
+            configuration["project"]["license-files"],
+            ["LICENSE", "NOTICE"],
+        )
+        self.assertIn("setuptools>=77", configuration["build-system"]["requires"])
+
+    def test_source_distribution_has_clear_legal_and_responsible_use_files(self) -> None:
+        license_text = (PROJECT_ROOT / "LICENSE").read_text(encoding="utf-8")
+        notice = (PROJECT_ROOT / "NOTICE").read_text(encoding="utf-8")
+        responsible_use = (PROJECT_ROOT / "RESPONSIBLE_USE.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Apache License\n                           Version 2.0", license_text)
+        self.assertIn("3. Grant of Patent License.", license_text)
+        self.assertIn("7. Disclaimer of Warranty.", license_text)
+        self.assertIn("END OF TERMS AND CONDITIONS", license_text)
+        self.assertIn("Copyright 2026 Swoon Code contributors", notice)
+        self.assertIn("not affiliated with, sponsored by, or endorsed by OpenAI", notice)
+        self.assertIn("Educational purpose", responsible_use)
+        self.assertIn("Each user is responsible", responsible_use)
+        self.assertIn("does not add a restriction", responsible_use)
 
     def test_offline_builder_creates_a_complete_verifiable_wheel(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -52,12 +75,26 @@ class ConsumerReleaseTests(unittest.TestCase):
                 self.assertIn(f"{DIST_INFO}/METADATA", names)
                 self.assertIn(f"{DIST_INFO}/entry_points.txt", names)
                 self.assertIn(f"{DIST_INFO}/RECORD", names)
+                self.assertIn(f"{DIST_INFO}/licenses/LICENSE", names)
+                self.assertIn(f"{DIST_INFO}/licenses/NOTICE", names)
                 self.assertFalse(any("cookies" in name.casefold() for name in names))
                 self.assertFalse(any(name.startswith("tests/") for name in names))
                 metadata = archive.read(f"{DIST_INFO}/METADATA").decode("utf-8")
+                self.assertIn("Metadata-Version: 2.4\n", metadata)
                 self.assertIn("Name: swoon-code\n", metadata)
                 self.assertIn(f"Version: {VERSION}\n", metadata)
+                self.assertIn("License-Expression: Apache-2.0\n", metadata)
+                self.assertIn("License-File: LICENSE\n", metadata)
+                self.assertIn("License-File: NOTICE\n", metadata)
                 self.assertIn("Requires-Dist: playwright>=1.50,<2\n", metadata)
+                self.assertEqual(
+                    archive.read(f"{DIST_INFO}/licenses/LICENSE"),
+                    (PROJECT_ROOT / "LICENSE").read_bytes(),
+                )
+                self.assertEqual(
+                    archive.read(f"{DIST_INFO}/licenses/NOTICE"),
+                    (PROJECT_ROOT / "NOTICE").read_bytes(),
+                )
                 entry_points = archive.read(f"{DIST_INFO}/entry_points.txt").decode("utf-8")
                 self.assertEqual(
                     entry_points,

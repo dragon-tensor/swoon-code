@@ -617,6 +617,16 @@ Resolved by the guarded dependency declaration implementation:
 - Results explicitly report `package_artifacts=not_installed`; the historical tool name does not
   imply that Phase 16 has downloaded or promoted executable third-party code.
 
+Resolved by the release licensing implementation:
+
+- Source code is licensed under the unmodified Apache License 2.0 with a root `LICENSE` and
+  informational `NOTICE`; responsible-use guidance is kept separate from the license terms.
+- `pyproject.toml` declares the `Apache-2.0` SPDX expression and its legal files using PEP 639.
+- The deterministic wheel emits core metadata 2.4, packages `LICENSE` and `NOTICE` beneath
+  `.dist-info/licenses/`, hashes them in `RECORD`, and smoke-tests their installed metadata.
+- The README and `RESPONSIBLE_USE.md` state the educational purpose, non-affiliation, credential
+  precautions, and user responsibility without claiming that intent overrides provider terms.
+
 Remaining open items:
 
 - Whether a future network-service capability should retain and join a dedicated isolated network

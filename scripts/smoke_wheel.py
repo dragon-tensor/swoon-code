@@ -60,6 +60,20 @@ def smoke_wheel(wheel: Path | None = None) -> None:
             f"import swoon; assert swoon.__version__ == {expected_version!r}",
             environment=command_environment,
         )
+        _run(
+            python,
+            "-c",
+            (
+                "from importlib.metadata import files, metadata; "
+                "m=metadata('swoon-code'); "
+                "assert m['License-Expression']=='Apache-2.0'; "
+                "assert set(m.get_all('License-File'))=={'LICENSE','NOTICE'}; "
+                "p={str(item) for item in files('swoon-code')}; "
+                "assert any(item.endswith('.dist-info/licenses/LICENSE') for item in p); "
+                "assert any(item.endswith('.dist-info/licenses/NOTICE') for item in p)"
+            ),
+            environment=command_environment,
+        )
 
 
 def _run(
@@ -85,7 +99,12 @@ def _run(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("wheel", nargs="?", type=Path, help="existing wheel; builds one if omitted")
+    parser.add_argument(
+        "wheel",
+        nargs="?",
+        type=Path,
+        help="existing wheel; builds one if omitted",
+    )
     args = parser.parse_args(argv)
     smoke_wheel(args.wheel)
     print("Consumer wheel smoke test passed.")

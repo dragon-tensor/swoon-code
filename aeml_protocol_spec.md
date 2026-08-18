@@ -593,6 +593,16 @@ Resolved by the persistent filesystem lifecycle implementation:
 - Unfinished chunks block lifecycle operations. A successful delete clears chunk records under
   its scope, while move/rename remaps them with the action result under the session lock.
 
+Resolved by the consumer release implementation:
+
+- `python -m swoon`, the installed `swoon` entry point, and `--version` expose the same CLI.
+- `swoon doctor` validates Playwright/Chromium installation, optional cookie JSON, and the
+  command-sandbox prerequisites without contacting ChatGPT.
+- A deterministic standard-library builder produces a pure-Python wheel with hashed `RECORD` and
+  console metadata while excluding cookies, tests, sessions, and caches.
+- A network-disabled smoke runner installs that wheel into a fresh virtual environment and tests
+  the installed entry point rather than importing the source checkout.
+
 Remaining open items:
 
 - Whether a future network-service capability should retain and join a dedicated isolated network

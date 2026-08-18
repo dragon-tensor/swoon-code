@@ -15,6 +15,21 @@ On supported 64-bit Linux hosts, foreground execution requires `bwrap`, `prlimit
 to running a command directly on the host. See `foreground-commands.md` and
 `background-commands.md` for exact isolation and lifecycle semantics.
 
+## Installation diagnostic
+
+Phase 15 adds a consumer check that does not contact ChatGPT:
+
+```bash
+swoon doctor
+swoon doctor --cookies cookies.json --launch-browser
+```
+
+The default check verifies the Python package, installed Playwright/Chromium files, and optional
+command-sandbox executables. Supplying `--cookies` validates the local JSON without printing its
+contents. `--launch-browser` additionally opens and closes headless Chromium; run that stronger
+probe from the same host terminal that will run the agent, since containers can deny browser
+launch even when the browser is correctly installed.
+
 ## Create a session
 
 ```bash

@@ -131,6 +131,61 @@ class CLITests(unittest.TestCase):
                 self.assertIn("relay response", stdout)
                 self.assertEqual(stderr, "")
 
+    def test_version_flag_reports_packaged_version(self) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout), self.assertRaises(SystemExit) as raised:
+            main(["--version"])
+
+        self.assertEqual(raised.exception.code, EXIT_SUCCESS)
+        self.assertEqual(stdout.getvalue().strip(), "swoon 0.1.0")
+
+    def test_doctor_reports_consumer_and_optional_sandbox_readiness(self) -> None:
+        browser = FakeBrowserTransport([])
+        with (
+            patch(
+                "swoon.cli._browser_runtime_status",
+                return_value=(True, "Chromium test launched successfully"),
+            ),
+            patch(
+                "swoon.cli._command_sandbox_status",
+                return_value=(False, "missing bwrap"),
+            ),
+        ):
+            code, stdout, stderr = self.invoke(["doctor"], browser)
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn("Swoon Code 0.1.0", stdout)
+        self.assertIn("[ok] Browser runtime", stdout)
+        self.assertIn("[skip] Cookie file", stdout)
+        self.assertIn("[optional] Command sandbox: missing bwrap", stdout)
+        self.assertIn("Consumer CLI is ready.", stdout)
+        self.assertEqual(stderr, "")
+
+    def test_doctor_fails_for_an_invalid_supplied_cookie_file(self) -> None:
+        browser = FakeBrowserTransport([])
+        with (
+            patch(
+                "swoon.cli._browser_runtime_status",
+                return_value=(True, "Chromium test launched successfully"),
+            ),
+            patch(
+                "swoon.cli._cookie_status",
+                return_value=(False, "invalid or unreadable (ValueError)"),
+            ),
+            patch(
+                "swoon.cli._command_sandbox_status",
+                return_value=(True, "ready on x86_64"),
+            ),
+        ):
+            code, stdout, stderr = self.invoke(
+                ["doctor", "--cookies", str(self.root / "cookies.json")],
+                browser,
+            )
+
+        self.assertEqual(code, EXIT_RUNTIME_ERROR)
+        self.assertIn("[fail] Cookie file", stdout)
+        self.assertIn("Consumer check failed", stderr)
+
     def test_agent_creates_a_session_and_completes(self) -> None:
         session_id = "sess_cli_complete"
         browser = FakeBrowserTransport(

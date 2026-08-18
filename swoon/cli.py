@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import platform
+import shutil
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
+from . import __version__
 from .aeml import AEMLPromptBuilder
 from .orchestration import (
     AgentOrchestrator,
@@ -32,7 +36,7 @@ EXIT_RUNTIME_ERROR = 5
 EXIT_INPUT_REQUIRED = 6
 EXIT_INTERRUPTED = 130
 
-_COMMANDS = frozenset({"chat", "agent"})
+_COMMANDS = frozenset({"chat", "agent", "doctor"})
 _ABORT_COMMANDS = frozenset({"/abort", "/quit"})
 
 
@@ -41,7 +45,27 @@ def build_parser() -> argparse.ArgumentParser:
         prog="swoon",
         description="ChatGPT browser relay and bounded AEML coding agent",
     )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    doctor = commands.add_parser(
+        "doctor",
+        help="check consumer browser and command-sandbox prerequisites",
+    )
+    doctor.add_argument(
+        "--cookies",
+        help="optionally validate a ChatGPT cookie/storage-state JSON file",
+    )
+    doctor.add_argument(
+        "--launch-browser",
+        action="store_true",
+        help="also launch and close Chromium instead of checking installation only",
+    )
+    doctor.set_defaults(handler=_run_doctor)
 
     chat = commands.add_parser("chat", help="run the direct ChatGPT terminal relay")
     _add_browser_arguments(chat)
@@ -127,6 +151,40 @@ def legacy_main(argv: list[str] | None = None) -> int:
 
     raw = list(sys.argv[1:] if argv is None else argv)
     return main(["chat", *raw])
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    """Report whether this installation can run consumer-facing capabilities."""
+
+    print(f"Swoon Code {__version__}")
+    print(f"[ok] Python: {platform.python_version()}")
+
+    browser_ready, browser_detail = _browser_runtime_status(
+        launch=args.launch_browser,
+    )
+    _print_diagnostic("Browser runtime", browser_ready, browser_detail)
+
+    cookies_ready: bool | None = None
+    if args.cookies:
+        cookies_ready, cookie_detail = _cookie_status(Path(args.cookies))
+        _print_diagnostic("Cookie file", cookies_ready, cookie_detail)
+    else:
+        print("[skip] Cookie file: not supplied")
+
+    sandbox_ready, sandbox_detail = _command_sandbox_status()
+    _print_diagnostic("Command sandbox", sandbox_ready, sandbox_detail, optional=True)
+
+    if not browser_ready or cookies_ready is False:
+        print(
+            "Consumer check failed. Install Chromium with "
+            "`python -m playwright install chromium` and fix any reported cookie error.",
+            file=sys.stderr,
+        )
+        return EXIT_RUNTIME_ERROR
+    print("Consumer CLI is ready.")
+    if not sandbox_ready:
+        print("File/read agent tools work, but command execution will fail closed.")
+    return EXIT_SUCCESS
 
 
 def _add_browser_arguments(parser: argparse.ArgumentParser) -> None:
@@ -542,6 +600,72 @@ def _print_agent_message(message: str) -> None:
     print(message, flush=True)
 
 
+def _browser_runtime_status(*, launch: bool = False) -> tuple[bool, str]:
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            executable = Path(playwright.chromium.executable_path)
+            if not executable.is_file():
+                return False, "Chromium executable is not installed"
+            if not launch:
+                return True, "Playwright and Chromium are installed"
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                version = browser.version
+            finally:
+                browser.close()
+            return True, f"Chromium {version} launched successfully"
+    except Exception as error:
+        return False, f"unavailable ({error.__class__.__name__})"
+    raise AssertionError("Browser diagnostic reached an impossible state")
+
+
+def _cookie_status(path: Path) -> tuple[bool, str]:
+    try:
+        transport = ChatGPTWebTransport(path)
+    except Exception as error:
+        return False, f"invalid or unreadable ({error.__class__.__name__})"
+    count = len(transport.raw_cookies)
+    if count < 1:
+        return False, "contains no cookies"
+    return True, f"valid storage state ({count} cookies)"
+
+
+def _command_sandbox_status() -> tuple[bool, str]:
+    architecture = platform.machine().lower()
+    supported_host = platform.system() == "Linux" and architecture in {
+        "x86_64",
+        "amd64",
+        "aarch64",
+        "arm64",
+    }
+    checks = {
+        "supported 64-bit Linux host": supported_host,
+        "bwrap": shutil.which("bwrap") is not None,
+        "prlimit": shutil.which("prlimit") is not None,
+        "system python3": any(
+            path.is_file()
+            for path in (Path("/usr/bin/python3"), Path("/usr/local/bin/python3"))
+        ),
+    }
+    missing = [name for name, available in checks.items() if not available]
+    if missing:
+        return False, "missing " + ", ".join(missing)
+    return True, f"ready on {architecture}"
+
+
+def _print_diagnostic(
+    label: str,
+    ready: bool,
+    detail: str,
+    *,
+    optional: bool = False,
+) -> None:
+    status = "ok" if ready else "optional" if optional else "fail"
+    print(f"[{status}] {label}: {detail}")
+
+
 def _report_input_required(session: Session, requirement: str) -> None:
     print(
         f"Input required: session {session.id} is waiting for {requirement}.",
@@ -555,7 +679,7 @@ def _report_error(error: Exception) -> None:
 
 
 def _normalize_legacy_args(argv: Sequence[str]) -> list[str]:
-    if not argv or argv[0] in _COMMANDS or argv[0] in {"-h", "--help"}:
+    if not argv or argv[0] in _COMMANDS or argv[0] in {"-h", "--help", "--version"}:
         return list(argv)
     return ["chat", *argv]
 

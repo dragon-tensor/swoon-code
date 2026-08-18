@@ -26,6 +26,7 @@ Implemented foundations:
 12. Offline foreground command, build, test, and linter sandboxing
 13. Supervised background commands with bounded streaming and handle-scoped termination
 14. Guarded output deletion, atomic relocation, and owner-private mode changes
+15. Offline wheel packaging, installed-entrypoint smoke testing, and consumer diagnostics
 
 The currently executable AEML tools are:
 
@@ -74,6 +75,13 @@ python3 -m venv .venv
 .venv/bin/python -m playwright install chromium
 ```
 
+Until the editable install is run, the same source CLI is available as
+`.venv/bin/python -m swoon`. Check the local consumer runtime with:
+
+```bash
+.venv/bin/python -m swoon doctor
+```
+
 Command tools additionally require compatible `bwrap` and `prlimit` executables on 64-bit Linux
 (x86-64 or AArch64). They fail closed rather than falling back to unsandboxed
 execution when those primitives are unavailable. Atomic `move`/`rename` additionally require a
@@ -82,6 +90,20 @@ of risking destination replacement.
 
 Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
 Cookie-Editor list and a Playwright storage-state object are accepted.
+
+## Consumer wheel
+
+Build and test the installable artifact without downloading build tooling:
+
+```bash
+python3 scripts/build_wheel.py
+python3 scripts/smoke_wheel.py dist/swoon_code-0.1.0-py3-none-any.whl
+```
+
+This creates a pure-Python wheel with the `swoon` console entry point and validates it in a fresh,
+networkless virtual environment. A real installation then resolves Playwright and installs its
+browser separately. See [Consumer build and test](docs/consumer-testing.md) for exact source,
+wheel, browser, cookie, relay, and agent acceptance steps.
 
 ## Agent CLI
 
@@ -235,6 +257,7 @@ and safety boundaries.
 - `docs/foreground-commands.md` — Phase 12 offline foreground execution boundary
 - `docs/background-commands.md` — Phase 13 supervised background lifecycle
 - `docs/filesystem-lifecycle.md` — Phase 14 guarded delete/move/rename/chmod boundary
+- `docs/consumer-testing.md` — Phase 15 wheel build, installation, doctor, and acceptance flow
 - `MIGRATION.md` — original relay history
 
 ## Tests

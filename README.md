@@ -110,17 +110,26 @@ execution when those primitives are unavailable. Atomic `move`/`rename` addition
 Linux filesystem exposing `renameat2(RENAME_NOREPLACE)`; an unsupported host fails closed instead
 of risking destination replacement.
 
-Export cookies from an authenticated ChatGPT session and save them as `cookies.json`. Both a
-Cookie-Editor list and a Playwright storage-state object are accepted. On POSIX systems the file
-must be owner-only:
+While signed in and viewing `https://chatgpt.com/`, export that site's cookies and save them as
+`cookies.json`. Do not export only from `auth.openai.com`: authentication-page cookies alone do
+not establish a ChatGPT application session. Both a Cookie-Editor list and a Playwright
+storage-state object are accepted, and the export must contain at least one `chatgpt.com` cookie.
+On POSIX systems the file must be owner-only:
 
 ```bash
 chmod 600 cookies.json
 ```
 
+Choose an unencrypted JSON cookie-list export. Hotcleaner Cookie Editor encrypted-backup files
+(`url`/`version`/encrypted `data`) are intentionally not decrypted or accepted. Do not provide an
+export password to Swoon.
+
 Refreshed storage state is not written automatically. Use `--save-storage-state` with a path in
 an existing owner-private directory to opt in. Debug screenshots are also disabled by default;
 `--debug-artifacts PRIVATE_DIRECTORY` enables uniquely named, owner-private captures.
+
+When `--cookies` is supplied, `doctor` validates credential structure and rejects authentication-
+site-only exports before Chromium starts. It never prints cookie values.
 
 ## Consumer artifacts
 
@@ -223,6 +232,13 @@ mkdir -p -m 700 "$HOME/.local/share/swoon-code"
 
 The legacy `chatgpt_agent.py` entrypoint remains compatible. The browser implementation is
 `swoon.transport.ChatGPTWebTransport`.
+
+Swoon does not treat the first visible text as a completed reply. It waits until ChatGPT is no
+longer showing a generation control and the assistant message has remained unchanged for five
+seconds. `--timeout` is the maximum wait for the whole response; `--response-settle-time` adjusts
+the unchanged-text window. If the maximum expires, Swoon stops the exchange and never submits a
+repair prompt based on a partial response. Multiline AEML is inserted into the composer as one
+atomic value and submitted once; embedded newlines are never emitted as Enter key events.
 
 ## Session results and cleanup
 

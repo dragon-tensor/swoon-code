@@ -224,11 +224,14 @@ def _run_doctor(args: argparse.Namespace) -> int:
     _print_diagnostic("Command sandbox", sandbox_ready, sandbox_detail, optional=True)
 
     if not browser_ready or cookies_ready is False:
-        print(
-            "Consumer check failed. Install Chromium with "
-            "`python -m playwright install chromium` and fix any reported cookie error.",
-            file=sys.stderr,
-        )
+        remedies: list[str] = []
+        if not browser_ready:
+            remedies.append(
+                "Install Chromium with `python -m playwright install chromium`."
+            )
+        if cookies_ready is False:
+            remedies.append("Fix the reported cookie error.")
+        print(f"Consumer check failed. {' '.join(remedies)}", file=sys.stderr)
         return EXIT_RUNTIME_ERROR
     print("Consumer CLI is ready.")
     if not sandbox_ready:
@@ -340,7 +343,13 @@ def _add_browser_arguments(parser: argparse.ArgumentParser) -> None:
         "--timeout",
         type=_positive_timeout,
         default=180.0,
-        help="response timeout in seconds (default: 180)",
+        help="maximum response wait in seconds (default: 180)",
+    )
+    parser.add_argument(
+        "--response-settle-time",
+        type=_positive_timeout,
+        default=5.0,
+        help="unchanged seconds required before a response is complete (default: 5)",
     )
 
 
@@ -474,7 +483,13 @@ def _run_agent(args: argparse.Namespace) -> int:
         print("Session aborted by the user.", file=sys.stderr)
         return EXIT_ABORTED
 
+    client: ChatGPTWebTransport | None = None
     if session is None:
+        try:
+            client = _transport(args)
+        except Exception as error:
+            _report_error(error)
+            return EXIT_RUNTIME_ERROR
         try:
             session = manager.create(
                 args.project,
@@ -487,9 +502,9 @@ def _run_agent(args: argparse.Namespace) -> int:
         print(f"Session: {session.id}")
         print(f"Output: {session.paths.host_output}")
 
-    client = None
     try:
-        client = _transport(args)
+        if client is None:
+            client = _transport(args)
         client.start()
         prompt_builder = AEMLPromptBuilder(dispatcher.tool_specs)
         orchestrator = AgentOrchestrator(
@@ -728,6 +743,7 @@ def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:
         verbose=args.verbose,
         headless=not args.headed,
         response_timeout=args.timeout,
+        response_settle_time=args.response_settle_time,
         storage_state_path=args.save_storage_state,
         debug_directory=args.debug_artifacts,
     )
@@ -774,7 +790,7 @@ def _cookie_status(path: Path) -> tuple[bool, str]:
     try:
         transport = ChatGPTWebTransport(path)
     except Exception as error:
-        return False, f"invalid or unreadable ({error.__class__.__name__})"
+        return False, f"invalid or unreadable: {error}"
     count = len(transport.raw_cookies)
     if count < 1:
         return False, "contains no cookies"

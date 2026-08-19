@@ -17,7 +17,13 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-SAMESITE_MAP = {"lax": "Lax", "strict": "Strict", "none": "None"}
+SAMESITE_MAP = {
+    "lax": "Lax",
+    "strict": "Strict",
+    "none": "None",
+    "no_restriction": "None",
+}
+SAMESITE_OMIT = frozenset({"unspecified"})
 CHATGPT_URL = "https://chatgpt.com/"
 MAX_COOKIE_FILE_BYTES = 2 * 1024 * 1024
 ALLOWED_COOKIE_DOMAINS = ("openai.com", "chatgpt.com")
@@ -40,7 +46,20 @@ TEXTAREA_SELECTORS = (
     "#prompt-textarea",
     "textarea[placeholder*='message' i]",
     "textarea[placeholder*='Send' i]",
+    "textarea[placeholder*='Ask' i]",
+    "textarea",
     "[contenteditable='true']",
+    "[contenteditable='plaintext-only']",
+    "[role='textbox']",
+)
+LOGGED_OUT_SELECTORS = (
+    "button[data-testid='login-button']",
+    "a[data-testid='login-button']",
+    "a[href*='/auth/login']",
+    "button:has-text('Log in')",
+    "a:has-text('Log in')",
+    "button:has-text('Sign up')",
+    "a:has-text('Sign up')",
 )
 SEND_BUTTON_SELECTORS = (
     "button[data-testid='send-button']",
@@ -49,10 +68,15 @@ SEND_BUTTON_SELECTORS = (
 )
 STOP_BUTTON_SELECTORS = (
     "button[data-testid='stop-button']",
+    "button[data-testid*='stop' i]",
     "button[aria-label='Stop generating']",
     "button[aria-label='Stop streaming']",
+    "button[aria-label*='stop' i]",
+    "button:has-text('Stop generating')",
 )
 MESSAGE_SELECTOR = "[data-message-author-role='assistant']"
+POLL_INTERVAL_SECONDS = 0.5
+DEFAULT_RESPONSE_SETTLE_SECONDS = 5.0
 
 class ChatGPTWebTransport:
     """Send text to ChatGPT through an authenticated browser session."""
@@ -64,13 +88,21 @@ class ChatGPTWebTransport:
         *,
         headless: bool = True,
         response_timeout: float = 180,
+        response_settle_time: float = DEFAULT_RESPONSE_SETTLE_SECONDS,
         storage_state_path: str | Path | None = None,
         debug_directory: str | Path | None = None,
     ) -> None:
         self.cookie_path = Path(cookie_path).expanduser()
         self.verbose = verbose
         self.headless = headless
+        if response_timeout <= 0:
+            raise ValueError("Response timeout must be positive")
+        if response_settle_time <= 0:
+            raise ValueError("Response settle time must be positive")
+        if response_settle_time >= response_timeout:
+            raise ValueError("Response settle time must be shorter than the response timeout")
         self.response_timeout = response_timeout
+        self.response_settle_time = response_settle_time
         self.storage_state_path = (
             Path(storage_state_path).expanduser() if storage_state_path is not None else None
         )
@@ -91,6 +123,11 @@ class ChatGPTWebTransport:
     def _load_cookies(self) -> list[dict[str, Any]]:
         raw = self._read_private_json(self.cookie_path)
 
+        if self._is_hotcleaner_encrypted_backup(raw):
+            raise ValueError(
+                "Encrypted Hotcleaner Cookie Editor backups are not supported; export an "
+                "unencrypted JSON cookie list while viewing https://chatgpt.com/"
+            )
         if isinstance(raw, dict):
             raw = raw.get("cookies")
         if not isinstance(raw, list) or not all(isinstance(item, dict) for item in raw):
@@ -130,14 +167,32 @@ class ChatGPTWebTransport:
 
             same_site = cookie.get("sameSite")
             if isinstance(same_site, str):
-                cookie["sameSite"] = SAMESITE_MAP.get(same_site.lower(), same_site)
-                if cookie["sameSite"] not in SAMESITE_MAP.values():
+                normalized_same_site = (
+                    same_site.strip().casefold().replace("-", "_").replace(" ", "_")
+                )
+                if normalized_same_site in SAMESITE_OMIT:
+                    cookie.pop("sameSite", None)
+                else:
+                    cookie["sameSite"] = SAMESITE_MAP.get(
+                        normalized_same_site,
+                        same_site,
+                    )
+                if (
+                    "sameSite" in cookie
+                    and cookie["sameSite"] not in SAMESITE_MAP.values()
+                ):
                     raise ValueError(f"Cookie {name!r} has an invalid sameSite value")
             elif same_site is not None:
                 raise ValueError(f"Cookie {name!r} has an invalid sameSite value")
             if "path" not in cookie and domain is not None:
                 cookie["path"] = "/"
             cookies.append(cookie)
+
+        if not any(self._cookie_targets_chatgpt(cookie) for cookie in cookies):
+            raise ValueError(
+                "Cookie file has no chatgpt.com cookie; export cookies while signed in at "
+                "https://chatgpt.com/, not from auth.openai.com"
+            )
 
         self.log(f"Loaded {len(cookies)} cookies")
         return cookies
@@ -152,12 +207,41 @@ class ChatGPTWebTransport:
         )
 
     @staticmethod
+    def _is_hotcleaner_encrypted_backup(raw: Any) -> bool:
+        if not isinstance(raw, dict):
+            return False
+        url = raw.get("url")
+        data = raw.get("data")
+        if not isinstance(url, str) or not isinstance(data, str) or not data:
+            return False
+        hostname = urlsplit(url).hostname
+        if not hostname:
+            return False
+        normalized = hostname.casefold().rstrip(".")
+        return normalized == "hotcleaner.com" or normalized.endswith(".hotcleaner.com")
+
+    @staticmethod
     def _allowed_domain(value: str) -> bool:
         domain = value.strip().casefold().lstrip(".").rstrip(".")
         return any(
             domain == allowed or domain.endswith("." + allowed)
             for allowed in ALLOWED_COOKIE_DOMAINS
         )
+
+    @staticmethod
+    def _cookie_targets_chatgpt(cookie: dict[str, Any]) -> bool:
+        domain = cookie.get("domain")
+        if isinstance(domain, str):
+            normalized = domain.strip().casefold().lstrip(".").rstrip(".")
+            if normalized == "chatgpt.com" or normalized.endswith(".chatgpt.com"):
+                return True
+        url = cookie.get("url")
+        if isinstance(url, str):
+            hostname = urlsplit(url).hostname
+            if hostname:
+                normalized = hostname.casefold().rstrip(".")
+                return normalized == "chatgpt.com" or normalized.endswith(".chatgpt.com")
+        return False
 
     @staticmethod
     def _read_private_json(path: Path) -> Any:
@@ -217,7 +301,15 @@ class ChatGPTWebTransport:
         self.log(f"Page: {self.page.url}")
         self._dismiss_modals()
         if "login" in self.page.url.lower():
-            raise RuntimeError("Redirected to login. Refresh cookies from chatgpt.com.")
+            raise RuntimeError(
+                "Redirected to login. Export fresh cookies while signed in at "
+                f"https://chatgpt.com/.{self._startup_debug_note()}"
+            )
+        if self._is_logged_out():
+            raise RuntimeError(
+                "ChatGPT session is not authenticated. Export fresh cookies while signed in at "
+                f"https://chatgpt.com/.{self._startup_debug_note()}"
+            )
 
         for selector in TEXTAREA_SELECTORS:
             try:
@@ -227,14 +319,32 @@ class ChatGPTWebTransport:
             except Exception:
                 continue
 
-        debug_note = ""
-        if self.debug_directory is not None:
+        raise RuntimeError(
+            "ChatGPT message composer was not found; the page may have changed or still be "
+            f"loading.{self._startup_debug_note()}"
+        )
+
+    def _is_logged_out(self) -> bool:
+        if self.page is None:
+            return False
+        for selector in LOGGED_OUT_SELECTORS:
             try:
-                screenshot = self._capture_debug_screenshot()
-                debug_note = f" Debug screenshot: {screenshot}."
-            except Exception as error:
-                debug_note = f" Debug capture failed ({error.__class__.__name__})."
-        raise RuntimeError(f"Chat input not found. Session expired?{debug_note}")
+                element = self.page.query_selector(selector)
+                if element and element.is_visible():
+                    self.log(f"Logged-out control detected: {selector}")
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _startup_debug_note(self) -> str:
+        if self.debug_directory is None:
+            return ""
+        try:
+            screenshot = self._capture_debug_screenshot()
+            return f" Debug screenshot: {screenshot}."
+        except Exception as error:
+            return f" Debug capture failed ({error.__class__.__name__})."
 
     def _capture_debug_screenshot(self) -> Path:
         if self.page is None or self.debug_directory is None:
@@ -283,6 +393,7 @@ class ChatGPTWebTransport:
         if self.page is None:
             raise RuntimeError("Transport has not been started")
 
+        self._wait_until_ready_to_send(timeout=self.response_timeout)
         self._dismiss_modals()
         old_messages = self.page.query_selector_all(MESSAGE_SELECTOR)
         previous_count = len(old_messages)
@@ -297,9 +408,10 @@ class ChatGPTWebTransport:
         if prompt is None:
             raise RuntimeError("Chat input not found")
 
-        prompt.click()
-        prompt.fill("")
-        self.page.keyboard.type(text, delay=5)
+        # ``keyboard.type`` turns embedded newlines into Enter key events on ChatGPT's
+        # contenteditable composer, which can submit one broken prompt per line. Playwright's
+        # fill operation sets the complete multiline value through one input event instead.
+        prompt.fill(text)
         time.sleep(0.3)
 
         button = None
@@ -319,6 +431,33 @@ class ChatGPTWebTransport:
             timeout=self.response_timeout,
         )
 
+    def _generation_is_active(self) -> bool:
+        if self.page is None:
+            return False
+        for selector in STOP_BUTTON_SELECTORS:
+            try:
+                button = self.page.query_selector(selector)
+                if button and button.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _wait_until_ready_to_send(self, *, timeout: float) -> None:
+        """Never submit a prompt while the page says a response is still streaming."""
+
+        if not self._generation_is_active():
+            return
+        self.log("A response is still generating; waiting before sending the next prompt")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._generation_is_active():
+                return
+            time.sleep(POLL_INTERVAL_SECONDS)
+        raise TimeoutError(
+            "ChatGPT was still generating the previous response; no new prompt was sent"
+        )
+
     def _wait_for_new_response(
         self,
         *,
@@ -327,40 +466,37 @@ class ChatGPTWebTransport:
         timeout: float,
     ) -> str:
         last = ""
-        stable_reads = 0
-        saw_new_response = False
+        last_change_at: float | None = None
         deadline = time.monotonic() + timeout
 
-        while time.monotonic() < deadline:
+        while (now := time.monotonic()) < deadline:
             self._dismiss_modals()
-            stop_visible = any(
-                button.is_visible()
-                for selector in STOP_BUTTON_SELECTORS
-                if (button := self.page.query_selector(selector))
-            )
+            generation_active = self._generation_is_active()
             messages = self.page.query_selector_all(MESSAGE_SELECTOR)
             if messages:
                 current = messages[-1].inner_text()
-                saw_new_response = len(messages) > previous_count or current != previous_text
-                if saw_new_response and current and not stop_visible:
-                    if current == last:
-                        stable_reads += 1
-                        if stable_reads >= 3:
-                            return current
-                    else:
+                is_new_response = len(messages) > previous_count or current != previous_text
+                if is_new_response and current:
+                    if current != last:
                         last = current
-                        stable_reads = 0
-                else:
-                    stable_reads = 0
-            time.sleep(0.5)
+                        last_change_at = now
+                    elif (
+                        not generation_active
+                        and last_change_at is not None
+                        and now - last_change_at >= self.response_settle_time
+                    ):
+                        self.log(
+                            "Assistant response finished and remained stable for "
+                            f"{self.response_settle_time:g} seconds"
+                        )
+                        return current
+            time.sleep(POLL_INTERVAL_SECONDS)
 
-        self.log("Timed out waiting for a new assistant response")
-        messages = self.page.query_selector_all(MESSAGE_SELECTOR)
-        if messages:
-            current = messages[-1].inner_text()
-            if len(messages) > previous_count or current != previous_text:
-                return current
-        raise TimeoutError("No new assistant response arrived before the timeout")
+        self.log("Timed out before the assistant response finished")
+        raise TimeoutError(
+            "ChatGPT did not finish a new assistant response before the timeout; "
+            "no follow-up prompt was sent"
+        )
 
     def close(self) -> None:
         errors: list[str] = []

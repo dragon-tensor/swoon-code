@@ -185,6 +185,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, EXIT_RUNTIME_ERROR)
         self.assertIn("[fail] Cookie file", stdout)
         self.assertIn("Consumer check failed", stderr)
+        self.assertNotIn("Install Chromium", stderr)
 
     def test_session_commands_list_show_export_and_delete_completed_output(self) -> None:
         manager = SessionManager(self.sessions)
@@ -874,6 +875,31 @@ class CLITests(unittest.TestCase):
         self.assertEqual(session.state.step, 0)
         self.assertTrue(browser.closed)
         self.assertIn("browser unavailable", stderr)
+
+    def test_invalid_cookie_preflight_does_not_create_a_session(self) -> None:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            patch(
+                "swoon.cli.ChatGPTWebTransport",
+                side_effect=ValueError("invalid ChatGPT cookies"),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            code = main(
+                self.agent_args(
+                    "--session-id",
+                    "sess_invalid_cookie_preflight",
+                    "--prompt",
+                    "Inspect",
+                )
+            )
+
+        self.assertEqual(code, EXIT_RUNTIME_ERROR)
+        self.assertEqual(SessionManager(self.sessions).list_session_ids(), ())
+        self.assertNotIn("Session:", stdout.getvalue())
+        self.assertIn("invalid ChatGPT cookies", stderr.getvalue())
 
     def test_resume_rejects_new_session_only_options_before_browser_start(self) -> None:
         session_id = "sess_cli_usage"

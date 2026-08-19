@@ -7,6 +7,15 @@ tagged; the `0.x` series remains experimental and may introduce breaking changes
 
 ### Release candidate: 0.1.0
 
+- Reject incomplete authentication-page-only and encrypted Hotcleaner cookie exports before
+  browser startup, detect ChatGPT guest mode explicitly, and recognize current textarea-style
+  message composers.
+- Normalize Chrome/Cookie-Editor `sameSite` variants for Playwright and report doctor remedies
+  only for the component that actually failed.
+- Prevent overlapping ChatGPT turns by waiting for generation to end and for a configurable
+  unchanged-response window; timeouts now reject partial AEML instead of triggering repair spam.
+- Insert multiline AEML into the ChatGPT composer atomically so newline characters cannot submit
+  incomplete prompts as separate messages.
 - Added a strict, resource-limited AEML parser, validator, prompt boundary, and resumable agent
   orchestration loop.
 - Added isolated input/output sessions, guarded filesystem and dependency mutations, offline

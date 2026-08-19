@@ -29,9 +29,16 @@ swoon doctor --cookies cookies.json --launch-browser
 The default check verifies the Python package, installed Playwright/Chromium files, and optional
 command-sandbox executables. Supplying `--cookies` validates the local JSON without printing its
 contents. On POSIX systems, validation rejects symbolic links and group/other-readable credential
-files; use `chmod 600 cookies.json`. `--launch-browser` additionally opens and closes headless Chromium; run that stronger
-probe from the same host terminal that will run the agent, since containers can deny browser
-launch even when the browser is correctly installed.
+files; use `chmod 600 cookies.json`. Export while signed in and viewing `https://chatgpt.com/`.
+An export containing only `auth.openai.com` cookies is rejected because it cannot establish the
+ChatGPT application session. `--launch-browser` additionally opens and closes headless Chromium;
+run that stronger probe from the same host terminal that will run the agent, since containers can
+deny browser launch even when the browser is correctly installed.
+
+The actual relay performs a second, live check after navigation. If ChatGPT displays its logged-
+out controls, Swoon stops before sending the prompt and reports that fresh `chatgpt.com` cookies
+are required. Use `--debug-artifacts` only when needed; screenshots may contain account or
+conversation information.
 
 ## Create a session
 
@@ -53,11 +60,19 @@ options are:
 - `--headed` and `--verbose` — expose the browser and transport diagnostics;
 - `--save-storage-state PATH` — explicitly persist refreshed credentials with owner-only mode;
 - `--debug-artifacts DIRECTORY` — explicitly allow uniquely named private startup screenshots;
-- `--timeout SECONDS` — set the positive response timeout.
+- `--timeout SECONDS` — set the positive maximum wait for a complete response;
+- `--response-settle-time SECONDS` — require this many unchanged seconds after generation stops
+  before accepting a response (default: 5, and it must be shorter than `--timeout`).
 
 Storage-state persistence and screenshots are disabled by default because both can contain account
 or conversation information. Their parent directories must already be owner-private. Cleanup or
 storage failures are reported rather than silently ignored.
+
+The browser transport refuses to submit a new AEML turn while ChatGPT exposes a visible generation
+control. It then waits for the new assistant message to remain unchanged for the configured settle
+window. A response timeout is a hard failure: partial output is not parsed and cannot trigger an
+automatic repair prompt. Each multiline AEML prompt is filled atomically and submitted with one
+explicit Send click, so its line endings cannot become accidental submissions.
 
 If `--prompt` is omitted, interactive mode asks for the initial task before creating a new
 session. `--non-interactive` instead requires `--prompt` and returns exit 6 if it is absent.

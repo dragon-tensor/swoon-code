@@ -18,7 +18,11 @@ The source checkout already supports Python's module launcher, even before insta
 `doctor` checks the installed Playwright/Chromium files and reports whether the optional offline
 command sandbox has `bwrap`, `prlimit`, a supported Linux architecture, and a system Python. It
 does not read cookies unless explicitly asked. A supplied POSIX cookie file must be a regular,
-owner-only file (`chmod 600 cookies.json`). Use the stronger probe from a normal host terminal:
+owner-only file (`chmod 600 cookies.json`). Export cookies while signed in and viewing
+`https://chatgpt.com/`; an export made only from `auth.openai.com` is incomplete and is rejected.
+Use an unencrypted JSON cookie list, not a Hotcleaner encrypted-backup file, and never provide an
+export password to Swoon.
+Use the stronger probe from a normal host terminal:
 
 ```bash
 .venv/bin/python -m swoon doctor \
@@ -28,7 +32,15 @@ owner-only file (`chmod 600 cookies.json`). Use the stronger probe from a normal
 
 The launch probe can fail inside a container or development sandbox even when Chromium is
 installed. Running it in the same terminal environment that will run Swoon is the meaningful
-consumer check.
+consumer check. This command validates cookie structure and browser launch. The subsequent relay
+is the live authentication check: it refuses a visible logged-out ChatGPT page before sending a
+prompt.
+
+During a live exchange, the default 180-second `--timeout` is the maximum response wait. Completion
+requires the assistant message to remain unchanged for five seconds after the visible generation
+control disappears. Use `--response-settle-time SECONDS` to increase that quiet window on slower
+connections. It must remain shorter than `--timeout`. A timeout aborts without returning partial
+text or sending a repair prompt.
 
 Run the deterministic adversarial protocol corpus as a separate offline gate:
 

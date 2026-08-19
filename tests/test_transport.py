@@ -22,6 +22,38 @@ class FakeMessage:
         return self.text
 
 
+class FakeVisibleElement:
+    def is_visible(self) -> bool:
+        return True
+
+
+class FakePromptElement(FakeVisibleElement):
+    def __init__(self) -> None:
+        self.values: list[str] = []
+
+    def fill(self, value: str) -> None:
+        self.values.append(value)
+
+
+class FakeButton(FakeVisibleElement):
+    def __init__(self) -> None:
+        self.clicks = 0
+
+    def click(self) -> None:
+        self.clicks += 1
+
+
+class FakeKeyboard:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    def type(self, value: str, **_options) -> None:
+        self.events.append(("type", value))
+
+    def press(self, value: str) -> None:
+        self.events.append(("press", value))
+
+
 class FakePage:
     def __init__(self, messages: list[FakeMessage]) -> None:
         self.messages = messages
@@ -34,6 +66,21 @@ class FakePage:
 
     def screenshot(self, *, path: str) -> None:
         Path(path).write_bytes(b"png")
+
+
+class FakeSubmitPage(FakePage):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.prompt = FakePromptElement()
+        self.send_button = FakeButton()
+        self.keyboard = FakeKeyboard()
+
+    def query_selector(self, selector: str):
+        if selector == "#prompt-textarea":
+            return self.prompt
+        if selector == "button[data-testid='send-button']":
+            return self.send_button
+        return None
 
 
 class FakeContext:
@@ -56,9 +103,10 @@ class FakeBrowser:
 
 
 class FakeStartPage(FakePage):
-    def __init__(self, *, selector_found: bool = True) -> None:
+    def __init__(self, *, selector_found: bool = True, logged_out: bool = False) -> None:
         super().__init__([])
         self.selector_found = selector_found
+        self.logged_out = logged_out
         self.url = "https://chatgpt.com/"
         self.goto_calls: list[tuple[str, str]] = []
         self.waited: list[str] = []
@@ -73,6 +121,11 @@ class FakeStartPage(FakePage):
 
     def title(self) -> str:
         return "ChatGPT"
+
+    def query_selector(self, selector: str):
+        if self.logged_out and selector == "button:has-text('Log in')":
+            return FakeVisibleElement()
+        return None
 
     def wait_for_selector(self, selector: str, *, timeout: int):
         self.waited.append(selector)
@@ -135,6 +188,7 @@ class ChatGPTWebTransportTests(unittest.TestCase):
         transport = object.__new__(ChatGPTWebTransport)
         transport.page = page
         transport.verbose = False
+        transport.response_settle_time = 1.0
         return transport
 
     def test_compatibility_alias_is_preserved(self) -> None:
@@ -156,13 +210,31 @@ class ChatGPTWebTransportTests(unittest.TestCase):
                     timeout=0.25,
                 )
 
+    def test_send_fills_multiline_prompt_atomically_then_clicks_once(self) -> None:
+        page = FakeSubmitPage()
+        transport = self.make_transport(page)
+        transport.response_timeout = 180
+        multiline = "<aeml>\n  <context>one</context>\n</aeml>"
+
+        with (
+            patch.object(transport, "_wait_for_new_response", return_value="response") as wait,
+            patch("swoon.transport.chatgpt_web.time.sleep"),
+        ):
+            result = transport.send(multiline)
+
+        self.assertEqual(result, "response")
+        self.assertEqual(page.prompt.values, [multiline])
+        self.assertEqual(page.send_button.clicks, 1)
+        self.assertEqual(page.keyboard.events, [])
+        wait.assert_called_once_with(previous_count=0, previous_text="", timeout=180)
+
     def test_wait_returns_a_stable_new_response(self) -> None:
         page = FakePage([FakeMessage("old"), FakeMessage("new")])
         transport = self.make_transport(page)
         with (
             patch(
                 "swoon.transport.chatgpt_web.time.monotonic",
-                side_effect=[0.0, 0.1, 0.2, 0.3, 0.4],
+                side_effect=[0.0, 0.5, 1.0, 1.5],
             ),
             patch("swoon.transport.chatgpt_web.time.sleep"),
         ):
@@ -173,13 +245,91 @@ class ChatGPTWebTransportTests(unittest.TestCase):
             )
         self.assertEqual(result, "new")
 
+    def test_wait_does_not_return_a_partial_response_at_timeout(self) -> None:
+        page = FakePage([FakeMessage("old"), FakeMessage("partial AEML")])
+        transport = self.make_transport(page)
+        with (
+            patch(
+                "swoon.transport.chatgpt_web.time.monotonic",
+                side_effect=[0.0, 0.1, 0.2, 0.3],
+            ),
+            patch("swoon.transport.chatgpt_web.time.sleep"),
+        ):
+            with self.assertRaisesRegex(TimeoutError, "no follow-up prompt was sent"):
+                transport._wait_for_new_response(
+                    previous_count=1,
+                    previous_text="old",
+                    timeout=0.25,
+                )
+
+    def test_wait_requires_generation_control_to_disappear(self) -> None:
+        page = FakePage([FakeMessage("old"), FakeMessage("complete")])
+        transport = self.make_transport(page)
+        with (
+            patch.object(
+                transport,
+                "_generation_is_active",
+                side_effect=[True, True, True, False, False],
+            ),
+            patch(
+                "swoon.transport.chatgpt_web.time.monotonic",
+                side_effect=[0.0, 0.5, 1.0, 1.5, 2.0, 2.5],
+            ),
+            patch("swoon.transport.chatgpt_web.time.sleep"),
+        ):
+            result = transport._wait_for_new_response(
+                previous_count=1,
+                previous_text="old",
+                timeout=5,
+            )
+        self.assertEqual(result, "complete")
+
+    def test_send_gate_waits_for_an_active_generation(self) -> None:
+        transport = self.make_transport(FakePage([]))
+        with (
+            patch.object(
+                transport,
+                "_generation_is_active",
+                side_effect=[True, True, False],
+            ),
+            patch(
+                "swoon.transport.chatgpt_web.time.monotonic",
+                side_effect=[0.0, 0.5, 1.0],
+            ),
+            patch("swoon.transport.chatgpt_web.time.sleep") as sleep,
+        ):
+            transport._wait_until_ready_to_send(timeout=5)
+        sleep.assert_called_once()
+
+    def test_response_settle_time_must_fit_inside_timeout(self) -> None:
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": "chatgpt.com",
+                    "path": "/",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "shorter than"):
+                ChatGPTWebTransport(
+                    cookie_path,
+                    response_timeout=5,
+                    response_settle_time=5,
+                )
+
     def test_cookie_loader_accepts_playwright_storage_state(self) -> None:
         state = {
             "cookies": [
                 {
                     "name": "session",
                     "value": "redacted",
-                    "domain": "auth.openai.com",
+                    "domain": "chatgpt.com",
                     "path": "/",
                     "sameSite": "lax",
                 }
@@ -193,8 +343,69 @@ class ChatGPTWebTransportTests(unittest.TestCase):
             transport = ChatGPTWebTransport(cookie_path)
 
         self.assertEqual(transport.raw_cookies[0]["sameSite"], "Lax")
-        self.assertEqual(transport.raw_cookies[0]["domain"], "auth.openai.com")
+        self.assertEqual(transport.raw_cookies[0]["domain"], "chatgpt.com")
         self.assertEqual(transport.raw_cookies[0]["path"], "/")
+
+    def test_cookie_loader_normalizes_chrome_same_site_variants(self) -> None:
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                    "sameSite": "no_restriction",
+                },
+                {
+                    "name": "auxiliary",
+                    "value": "secret",
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                    "sameSite": "unspecified",
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+            transport = ChatGPTWebTransport(cookie_path)
+
+        self.assertEqual(transport.raw_cookies[0]["sameSite"], "None")
+        self.assertNotIn("sameSite", transport.raw_cookies[1])
+
+    def test_cookie_loader_rejects_auth_site_only_export(self) -> None:
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": ".auth.openai.com",
+                    "path": "/",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+
+            with self.assertRaisesRegex(ValueError, "no chatgpt.com cookie"):
+                ChatGPTWebTransport(cookie_path)
+
+    def test_cookie_loader_rejects_encrypted_hotcleaner_backup(self) -> None:
+        backup = {
+            "url": "https://www.hotcleaner.com/cookie-editor/",
+            "version": 2,
+            "data": "ZW5jcnlwdGVkLWNvb2tpZS1iYWNrdXA=",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(backup), encoding="utf-8")
+            cookie_path.chmod(0o600)
+
+            with self.assertRaisesRegex(ValueError, "Encrypted Hotcleaner.*not supported"):
+                ChatGPTWebTransport(cookie_path)
 
     def test_cookie_loader_rejects_broad_permissions_symlinks_and_placeholders(self) -> None:
         if os.name != "posix":
@@ -398,11 +609,54 @@ class ChatGPTWebTransportTests(unittest.TestCase):
                 {"playwright": playwright, "playwright.sync_api": sync_api},
             ):
                 transport = ChatGPTWebTransport(cookie_path)
-                with self.assertRaisesRegex(RuntimeError, "Chat input not found"):
+                with self.assertRaisesRegex(RuntimeError, "message composer was not found"):
                     transport.start()
                 transport.close()
 
         self.assertEqual(page.screenshot_calls, [])
+
+    def test_start_rejects_logged_out_page_with_private_debug_capture(self) -> None:
+        if os.name != "posix":
+            self.skipTest("POSIX permission semantics are required")
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            cookie_path = root / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+            page = FakeStartPage(logged_out=True)
+            browser = FakeLaunchedBrowser(page)
+            manager = FakePlaywrightManager(FakeChromium(browser))
+            sync_api = types.ModuleType("playwright.sync_api")
+            sync_api.sync_playwright = lambda: manager
+            playwright = types.ModuleType("playwright")
+
+            with patch.dict(
+                sys.modules,
+                {"playwright": playwright, "playwright.sync_api": sync_api},
+            ):
+                transport = ChatGPTWebTransport(
+                    cookie_path,
+                    debug_directory=root / "debug",
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "session is not authenticated.*Debug screenshot",
+                ):
+                    transport.start()
+                transport.close()
+
+        self.assertEqual(len(page.screenshot_calls), 1)
 
 
 if __name__ == "__main__":

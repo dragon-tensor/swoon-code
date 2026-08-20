@@ -2,8 +2,8 @@
 
 Phase 19 exposes persisted work to the human without giving AEML any new authority. Session
 management commands are local operations and never start a browser or contact a hosted service.
-They use the same private application-data directory as `swoon agent`; pass `--session-dir` when
-the agent used a custom location.
+Named consumer sessions use the configured `work/` root. The legacy `--session-dir` option remains
+available for embedded or older layouts.
 
 ## Locate work
 
@@ -11,7 +11,7 @@ List sessions in deterministic ID order:
 
 ```bash
 swoon session list
-swoon session list --session-dir /private/session/storage
+swoon session list --work-dir /path/to/work
 ```
 
 The table includes lifecycle status, consumed/maximum steps, and the last state-update timestamp.
@@ -21,7 +21,7 @@ as a healthy session.
 Inspect one session and reveal its human-side physical paths:
 
 ```bash
-swoon session show sess_EXAMPLE
+swoon session show my-project
 ```
 
 The physical paths are printed only to the local terminal. AEML continues to see the virtual
@@ -33,7 +33,7 @@ The imported project is never modified in place. Export a completed or aborted s
 to a destination that does not yet exist:
 
 ```bash
-swoon session export sess_EXAMPLE ./swoon-result
+swoon session export my-project ./swoon-result
 ```
 
 Export rejects active/waiting sessions, symbolic links, hard links, special files, excessive
@@ -49,13 +49,13 @@ remain disposable; only explicit AEML filesystem operations appear in session ou
 Completed and aborted sessions can be removed interactively:
 
 ```bash
-swoon session delete sess_EXAMPLE
+swoon session delete my-project
 ```
 
 For automation, the confirmation must be explicit:
 
 ```bash
-swoon session delete sess_EXAMPLE --yes
+swoon session delete my-project --yes
 ```
 
 Non-terminal sessions are rejected by default. `--force-active --yes` exists for an abandoned
@@ -65,5 +65,6 @@ isolates the exact validated session directory under a randomized tombstone and 
 it never accepts a path in place of a validated session ID.
 
 Session data can contain imported source, generated source, prompts/results, plans, and command
-output. Export what is needed and delete stale sessions according to the user's own retention and
-privacy requirements.
+output. For named sessions, confirmed deletion removes the matching `work/input/NAME`,
+`work/output/NAME`, and hidden state together. Export what is needed first and delete stale
+sessions according to the user's own retention and privacy requirements.

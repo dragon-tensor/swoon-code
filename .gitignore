@@ -16,6 +16,15 @@ build/
 .env
 venv/
 .venv/
+codebase/.local/
+setup/.runtime/
+
+# Consumer workspaces — keep only the empty public input/output roots
+work/.sessions/
+work/input/*
+!work/input/.gitkeep
+work/output/*
+!work/output/.gitkeep
 
 
 

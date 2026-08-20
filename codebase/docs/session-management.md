@@ -11,17 +11,24 @@ The protocol always exposes these POSIX-style virtual roots:
 /output/<session_id>
 ```
 
-`SessionManager` maps them to private host directories under an application data directory. A
-custom physical base can be supplied for tests or embedding, but it is never sent to the hosted
-chatbot.
+The consumer-facing `WorkspaceSessionManager` maps a human name to matching visible folders:
+
+```text
+work/input/<name>
+work/output/<name>
+```
+
+Crash-safe state and locks live separately under hidden `work/.sessions/`. Those physical metadata
+paths are never sent to the hosted chatbot. The original nested `SessionManager` remains available
+for embedding and backward-compatible tests.
 
 ## Creating and loading
 
 ```python
-from swoon.session import SessionManager
+from swoon.session import WorkspaceSessionManager, session_id_for_workspace
 
-manager = SessionManager()
-session = manager.create("/path/to/project", max_steps=40)
+manager = WorkspaceSessionManager("/path/to/work")
+session = manager.create(session_id=session_id_for_workspace("my-project"), max_steps=40)
 
 print(session.id)
 print(session.paths.input_root)
@@ -30,9 +37,10 @@ print(session.paths.output_root)
 resumed = manager.load(session.id)
 ```
 
-The source project is copied into the session input directory. Symbolic links, hard links,
-special files, excessive file counts, and excessive byte counts are rejected. Input files are
-sealed with owner-read-only permissions; executable files retain owner execute permission.
+Users may populate `work/input/my-project/` before creating the session. The manager validates and
+adopts that tree, then seals it read-only. Alternatively, a source project can be copied into a new
+named input directory. Symbolic links, hard links, special files, excessive file counts, and
+excessive byte counts are rejected.
 
 These permissions are tamper evidence and defense in depth. Phase 12 additionally copies a
 credential-filtered input snapshot and mounts it read-only in the command sandbox, because a

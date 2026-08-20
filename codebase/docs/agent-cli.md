@@ -42,8 +42,20 @@ conversation information.
 
 ## Create a session
 
+For consumers, create `work/input/NAME/`, place source files there, and launch or resume the same
+named interactive agent with:
+
 ```bash
-.venv/bin/swoon agent \
+swoon NAME
+```
+
+With no name, `swoon` uses the `default` workspace. Both commands are headless. The matching output
+is always visible at `work/output/NAME/`; internal state remains hidden under `work/.sessions/`.
+
+The expanded developer interface remains available:
+
+```bash
+swoon agent \
   --cookies cookies.json \
   --project /path/to/project \
   --prompt "Inspect the architecture and identify its entry points."
@@ -54,6 +66,8 @@ root. A new session receives a generated ID and a 40-step budget by default. Use
 options are:
 
 - `--session-dir PATH` — override private persistent session storage;
+- `--work-dir PATH` — override the named consumer `work` root;
+- `--name NAME` — create or automatically resume matching input/output folders;
 - `--session-id sess_NAME` — assign a valid ID instead of generating one;
 - `--max-steps N` — set the initial budget from 1 through 10,000;
 - `--protocol-retries N` — allow 0 through 10 AEML repair attempts after the original response;
@@ -78,7 +92,8 @@ explicit Send click, so its line endings cannot become accidental submissions.
 Without `--interactive`, omitting `--prompt` asks once for the initial task before creating a new
 session. `--interactive` starts a persistent terminal coding-agent console instead: each completed
 task returns to `swoon>` in the same session, retaining its output, browser conversation, and
-validated action history. Enter `/quit` or `/abort` at `swoon>` to end the session. The
+validated action history. Enter `/quit` to pause it for `swoon NAME` to resume later, or `/abort`
+to make it terminal. The
 `--non-interactive` mode instead requires `--prompt` and returns exit 6 if it is absent.
 
 The CLI prints `Session: sess_...` and the human-side physical output path before browser startup.
@@ -117,14 +132,14 @@ In non-interactive mode, an unavailable decision returns exit 6. A later process
 the stored action:
 
 ```bash
-.venv/bin/swoon agent \
+swoon agent \
   --cookies cookies.json \
   --resume sess_EXAMPLE \
   --approve-pending \
   --non-interactive
 
 # Or leave the target unchanged:
-.venv/bin/swoon agent \
+swoon agent \
   --cookies cookies.json \
   --resume sess_EXAMPLE \
   --deny-pending \
@@ -139,7 +154,7 @@ They do not approve later destructive actions.
 Use the same physical session directory when it was customized:
 
 ```bash
-.venv/bin/swoon agent \
+swoon agent \
   --cookies cookies.json \
   --session-dir /private/session/storage \
   --resume sess_EXAMPLE \
@@ -154,7 +169,7 @@ are injected into the new context.
 a script, approval must be explicit:
 
 ```bash
-.venv/bin/swoon agent \
+swoon agent \
   --cookies cookies.json \
   --resume sess_EXAMPLE \
   --additional-steps 5 \
@@ -188,14 +203,14 @@ process never signals a PID loaded from disk; a stale running record becomes `lo
 The unstructured relay is separate from the AEML agent:
 
 ```bash
-.venv/bin/swoon chat --cookies cookies.json --prompt "Hello"
-.venv/bin/swoon chat --cookies cookies.json --interactive
+swoon chat --cookies cookies.json --prompt "Hello"
+swoon chat --cookies cookies.json --interactive
 ```
 
 Historical invocations without a subcommand still route to `chat`:
 
 ```bash
-.venv/bin/swoon --cookies cookies.json -p "Hello"
+swoon --cookies cookies.json -p "Hello"
 ./chatgpt.sh --cookies cookies.json -i
 python chatgpt_agent.py --cookies cookies.json -p "Hello"
 ```

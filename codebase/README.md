@@ -91,45 +91,50 @@ wrapper remain direct chatbot relays.
 
 ## Setup
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/python -m playwright install chromium
+The repository has three visible product roots:
+
+```text
+codebase/                application source, tests, docs, and release tooling
+setup/                   Linux, macOS, Windows, and headed-development launchers
+work/input/<name>/       files supplied by the user for one named session
+work/output/<name>/      files written by the agent for that same session
 ```
 
-Until the editable install is run, the same source CLI is available as
-`.venv/bin/python -m swoon`. Check the local consumer runtime with:
+Consumers do not create a virtual environment or install requirements manually. Export cookies
+while signed in at `https://chatgpt.com/`, then run the installer for the current operating system:
 
 ```bash
-.venv/bin/python -m swoon doctor
+# Linux or macOS, from the repository root
+./setup/install.sh /path/to/cookies.json
+
+# Windows, from the repository root
+setup\windows\install.cmd -Cookies C:\path\to\cookies.json
 ```
 
-Command tools additionally require compatible `bwrap` and `prlimit` executables on 64-bit Linux
-(x86-64 or AArch64). They fail closed rather than falling back to unsandboxed
-execution when those primitives are unavailable. Atomic `move`/`rename` additionally require a
-Linux filesystem exposing `renameat2(RENAME_NOREPLACE)`; an unsupported host fails closed instead
-of risking destination replacement.
+The installer privately manages Python dependencies, the Playwright browser runtime, credentials,
+and the terminal launcher. Open a new terminal afterward. One word starts the default interactive
+coding agent; two words create or resume a named workspace:
 
-While signed in and viewing `https://chatgpt.com/`, export that site's cookies and save them as
-`cookies.json`. Do not export only from `auth.openai.com`: authentication-page cookies alone do
-not establish a ChatGPT application session. Both a Cookie-Editor list and a Playwright
-storage-state object are accepted, and the export must contain at least one `chatgpt.com` cookie.
-On POSIX systems the file must be owner-only:
+```text
+swoon
+swoon my-project
+```
+
+Before the first launch of `swoon my-project`, place any source files in
+`work/input/my-project/`. Swoon creates `work/output/my-project/` and writes only there. Running the
+same command later resumes the same agent session. Consumer mode uses a headless browser, so no
+ChatGPT window opens.
+
+Developers who explicitly want the visible browser and transport logs can run:
 
 ```bash
-chmod 600 cookies.json
+./setup/dev/start-headed.sh my-project
+# Windows: powershell -File setup\dev\start-headed.ps1 my-project
 ```
 
-Choose an unencrypted JSON cookie-list export. Hotcleaner Cookie Editor encrypted-backup files
-(`url`/`version`/encrypted `data`) are intentionally not decrypted or accepted. Do not provide an
-export password to Swoon.
-
-Refreshed storage state is not written automatically. Use `--save-storage-state` with a path in
-an existing owner-private directory to opt in. Debug screenshots are also disabled by default;
-`--debug-artifacts PRIVATE_DIRECTORY` enables uniquely named, owner-private captures.
-
-When `--cookies` is supplied, `doctor` validates credential structure and rejects authentication-
-site-only exports before Chromium starts. It never prints cookie values.
+Linux command execution additionally uses `bwrap` and `prlimit`; the Linux installers handle those
+packages for Arch-family, Debian/Ubuntu-family, and Fedora-family distributions. Unsupported
+platform capabilities fail closed rather than falling back to unsafe host execution.
 
 ## Consumer artifacts
 
@@ -156,39 +161,26 @@ source, package, browser, cookie, relay, and agent acceptance steps.
 
 ## Agent CLI
 
-Create a session by importing an existing project as read-only input:
+The normal consumer interface is the persistent terminal coding agent:
 
 ```bash
-.venv/bin/swoon agent \
-  --cookies cookies.json \
-  --project /path/to/project \
-  --prompt "Copy this project to output and add a health endpoint."
+swoon my-project
 ```
 
-The command prints the session ID and private output path before starting the browser. If the agent
-asks a question or reaches its step limit, the default interactive mode reads the human answer or
-additional-step approval from the terminal. Resume a saved session with the same session storage
-directory:
+It maps the name directly to these folders:
 
-```bash
-.venv/bin/swoon agent \
-  --cookies cookies.json \
-  --resume sess_EXAMPLE \
-  --prompt "Continue the inspection."
+```text
+work/input/my-project
+work/output/my-project
 ```
 
 ### Interactive terminal coding agent
 
-Use `--interactive` when you want an ongoing terminal conversation with the coding agent, rather
-than one autonomous task invocation. The same private session, browser conversation, tool history,
-and output directory remain active between your instructions:
+The same private session, validated tool history, and output directory remain active between your
+instructions:
 
 ```bash
-.venv/bin/swoon agent \
-  --interactive \
-  --headed \
-  --cookies cookies.json \
-  --project /path/to/project
+swoon my-project
 ```
 
 ```text
@@ -198,14 +190,15 @@ swoon> Inspect the project and explain the architecture.
 ```
 
 After a task completes, Swoon returns to `swoon>` for your next instruction. The terminal still
-asks separately before destructive changes and when the step budget needs extension. `/quit` or
-`/abort` ends the active session safely; its output remains available for export.
+asks separately before destructive changes and when the step budget needs extension. `/quit`
+pauses the session for later resumption; `/abort` permanently aborts it. Output stays in the named
+folder throughout.
 
 For scripted use, `--non-interactive` returns exit code 6 when human input is required. An
 exhausted session can be resumed with explicit approval:
 
 ```bash
-.venv/bin/swoon agent \
+swoon agent \
   --cookies cookies.json \
   --resume sess_EXAMPLE \
   --additional-steps 5 \
@@ -218,7 +211,7 @@ resume the exact stored action with `--approve-pending` or `--deny-pending`. Nei
 future actions:
 
 ```bash
-.venv/bin/swoon agent \
+swoon agent \
   --cookies cookies.json \
   --resume sess_EXAMPLE \
   --approve-pending \
@@ -236,7 +229,7 @@ the network.
 
 ```bash
 # Explicit relay command
-.venv/bin/swoon chat --cookies cookies.json -i
+swoon chat --cookies cookies.json -i
 
 # Interactive relay
 ./chatgpt.sh --cookies cookies.json -i
@@ -266,20 +259,20 @@ atomic value and submitted once; embedded newlines are never emitted as Enter ke
 
 ## Session results and cleanup
 
-The agent prints both its session ID and private physical output path. It never changes the
-original imported project. After a session is completed or aborted, inspect and export its output:
+The agent prints both its session ID and visible output path. It never changes the original
+imported project. Inspect or export a completed or aborted workspace with its friendly name:
 
 ```bash
-.venv/bin/swoon session list
-.venv/bin/swoon session show sess_EXAMPLE
-.venv/bin/swoon session export sess_EXAMPLE ./swoon-result
+swoon session list
+swoon session show my-project
+swoon session export my-project ./swoon-result
 ```
 
 The export destination must not exist. Review the exported tree before applying it elsewhere.
 Remove retained session data with an exact, separately confirmed command:
 
 ```bash
-.venv/bin/swoon session delete sess_EXAMPLE
+swoon session delete my-project
 ```
 
 See [Consumer session management](docs/session-cli.md) for custom storage, automation, active-state

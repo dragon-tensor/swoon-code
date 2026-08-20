@@ -21,6 +21,13 @@ from .models import (
     SessionState,
     SessionStatus,
 )
+from .workspace import (
+    WorkspaceSessionManager,
+    default_work_directory,
+    session_id_for_workspace,
+    validate_workspace_name,
+    workspace_name_for_session,
+)
 
 __all__ = [
     "ActionRecord",
@@ -41,5 +48,10 @@ __all__ = [
     "SessionState",
     "SessionStatus",
     "StepLimitReachedError",
+    "WorkspaceSessionManager",
     "default_session_directory",
+    "default_work_directory",
+    "session_id_for_workspace",
+    "validate_workspace_name",
+    "workspace_name_for_session",
 ]

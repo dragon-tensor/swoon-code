@@ -7,7 +7,22 @@ command.
 
 ## Fastest source-tree check
 
-The source checkout already supports Python's module launcher, even before installation:
+The supported consumer setup hides Python environments and dependency installation:
+
+```bash
+# Run from the repository root
+./setup/install.sh /path/to/cookies.json
+
+# Then open a new terminal
+swoon
+swoon demo
+```
+
+Windows uses `setup\windows\install.cmd`; macOS uses the same top-level `setup/install.sh` as
+Linux. Normal consumer sessions run the browser headlessly. Developers can opt into a visible
+browser with `setup/dev/start-headed.sh demo` or its PowerShell counterpart.
+
+Developers working inside `codebase/` can still use Python's module launcher:
 
 ```bash
 .venv/bin/python -m swoon --version

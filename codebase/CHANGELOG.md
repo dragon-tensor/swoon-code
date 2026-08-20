@@ -18,6 +18,8 @@ tagged; the `0.x` series remains experimental and may introduce breaking changes
   incomplete prompts as separate messages.
 - Add a persistent `swoon agent --interactive` terminal console for successive coding tasks in one
   session.
+- Replace the consumer layout with `codebase/`, named `work/input|output/` folders, and
+  platform-specific `setup/` installers; add one-word `swoon` and two-word `swoon NAME` launches.
 - Added a strict, resource-limited AEML parser, validator, prompt boundary, and resumable agent
   orchestration loop.
 - Added isolated input/output sessions, guarded filesystem and dependency mutations, offline

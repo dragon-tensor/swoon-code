@@ -16,6 +16,10 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONDONTWRITEBYTECODE: "1"
 
+defaults:
+  run:
+    working-directory: codebase
+
 jobs:
   unit:
     name: Python ${{ matrix.python }}
@@ -107,5 +111,5 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: swoon-release-candidate
-          path: dist/
+          path: codebase/dist/
           if-no-files-found: error

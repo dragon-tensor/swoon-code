@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import shutil
 import sys
@@ -23,6 +24,9 @@ from .session import (
     Session,
     SessionManager,
     SessionStatus,
+    WorkspaceSessionManager,
+    session_id_for_workspace,
+    workspace_name_for_session,
 )
 from .transport import AEMLChatChannel, ChatGPTWebTransport
 from .tools import AgentToolDispatcher
@@ -121,13 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
     source = agent.add_mutually_exclusive_group()
     source.add_argument("--project", help="copy a project into a new session's input root")
     source.add_argument("--resume", metavar="SESSION_ID", help="resume a persisted session")
-    agent.add_argument(
-        "--session-dir",
-        help="physical session storage directory (defaults to the private app data directory)",
-    )
-    agent.add_argument(
+    _add_session_directory_argument(agent)
+    identity = agent.add_mutually_exclusive_group()
+    identity.add_argument(
         "--session-id",
         help="explicit ID for a new session; normally generated automatically",
+    )
+    identity.add_argument(
+        "--name",
+        help="named work/input and work/output folder (creates or resumes automatically)",
     )
     agent.add_argument(
         "--max-steps",
@@ -174,9 +180,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_session_directory_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+    storage = parser.add_mutually_exclusive_group()
+    storage.add_argument(
         "--session-dir",
-        help="physical session storage directory (defaults to the private app data directory)",
+        help="legacy nested session storage directory",
+    )
+    storage.add_argument(
+        "--work-dir",
+        help="work root containing input and output folders",
     )
 
 
@@ -186,8 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     if not raw:
-        parser.print_help()
-        return 1
+        raw = ["agent", "--interactive", "--name", "default"]
     normalized = _normalize_legacy_args(raw)
     args = parser.parse_args(normalized)
     handler = getattr(args, "handler", None)
@@ -247,7 +257,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
 
 def _run_session_list(args: argparse.Namespace) -> int:
     try:
-        manager = SessionManager(args.session_dir)
+        manager = _session_manager(args)
         identifiers = manager.list_session_ids()
     except Exception as error:
         _report_error(error)
@@ -266,8 +276,13 @@ def _run_session_list(args: argparse.Namespace) -> int:
             code = getattr(error, "code", error.__class__.__name__)
             print(f"{identifier}\tERROR:{code}\t-\t-", file=sys.stderr)
             continue
+        label = (
+            workspace_name_for_session(session.id)
+            if isinstance(manager, WorkspaceSessionManager)
+            else session.id
+        )
         print(
-            f"{session.id}\t{session.state.status.value}\t"
+            f"{label}\t{session.state.status.value}\t"
             f"{session.state.step}/{session.state.max_steps}\t"
             f"{session.state.updated_at.isoformat()}"
         )
@@ -276,7 +291,8 @@ def _run_session_list(args: argparse.Namespace) -> int:
 
 def _run_session_show(args: argparse.Namespace) -> int:
     try:
-        session = SessionManager(args.session_dir).load(args.session_id)
+        manager = _session_manager(args)
+        session = manager.load(_session_reference(manager, args.session_id))
     except Exception as error:
         _report_error(error)
         return EXIT_RUNTIME_ERROR
@@ -296,8 +312,10 @@ def _run_session_show(args: argparse.Namespace) -> int:
 
 def _run_session_export(args: argparse.Namespace) -> int:
     try:
-        destination = SessionManager(args.session_dir).export_output(
-            args.session_id,
+        manager = _session_manager(args)
+        identifier = _session_reference(manager, args.session_id)
+        destination = manager.export_output(
+            identifier,
             args.destination,
         )
     except Exception as error:
@@ -308,6 +326,8 @@ def _run_session_export(args: argparse.Namespace) -> int:
 
 
 def _run_session_delete(args: argparse.Namespace) -> int:
+    manager = _session_manager(args)
+    identifier = _session_reference(manager, args.session_id)
     if not args.yes:
         try:
             decision = input(
@@ -320,8 +340,8 @@ def _run_session_delete(args: argparse.Namespace) -> int:
             print("Session deletion cancelled.")
             return EXIT_SUCCESS
     try:
-        SessionManager(args.session_dir).delete_session(
-            args.session_id,
+        manager.delete_session(
+            identifier,
             force_active=args.force_active,
         )
     except Exception as error:
@@ -332,7 +352,10 @@ def _run_session_delete(args: argparse.Namespace) -> int:
 
 
 def _add_browser_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--cookies", required=True, help="ChatGPT cookie/storage-state JSON")
+    parser.add_argument(
+        "--cookies",
+        help="ChatGPT cookie JSON (defaults to the configured setup location)",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--headed", action="store_true", help="show the browser window")
     parser.add_argument(
@@ -397,25 +420,28 @@ def _run_agent(args: argparse.Namespace) -> int:
     if args.resume is not None and args.session_id is not None:
         print("Error: --session-id cannot be combined with --resume.", file=sys.stderr)
         return EXIT_USAGE
+    if args.resume is not None and args.name is not None:
+        print("Error: --name cannot be combined with --resume.", file=sys.stderr)
+        return EXIT_USAGE
+    if args.name is not None and args.session_dir is not None:
+        print("Error: --name uses --work-dir, not legacy --session-dir.", file=sys.stderr)
+        return EXIT_USAGE
     if args.resume is not None and args.max_steps is not None:
         print("Error: --max-steps applies only to new sessions.", file=sys.stderr)
-        return EXIT_USAGE
-    if args.resume is None and args.additional_steps is not None:
-        print("Error: --additional-steps requires --resume.", file=sys.stderr)
-        return EXIT_USAGE
-    if args.resume is None and (args.approve_pending or args.deny_pending):
-        print(
-            "Error: pending-action decisions require --resume.",
-            file=sys.stderr,
-        )
         return EXIT_USAGE
     if args.prompt is not None and not args.prompt.strip():
         print("Error: --prompt cannot be empty.", file=sys.stderr)
         return EXIT_USAGE
 
     try:
-        manager = SessionManager(args.session_dir)
-        session = manager.load(args.resume) if args.resume else None
+        manager = _session_manager(args)
+        if args.resume:
+            session = manager.load(_session_reference(manager, args.resume))
+        elif args.name:
+            assert isinstance(manager, WorkspaceSessionManager)
+            session = manager.load_name_if_present(args.name)
+        else:
+            session = None
         dispatcher = AgentToolDispatcher(manager)
         if session is not None:
             dispatcher.reconcile_background(session)
@@ -423,9 +449,23 @@ def _run_agent(args: argparse.Namespace) -> int:
         _report_error(error)
         return EXIT_RUNTIME_ERROR
 
+    resuming = session is not None
+    if resuming and args.project is not None:
+        print("Error: --project only applies when creating a named session.", file=sys.stderr)
+        return EXIT_USAGE
+    if not resuming and args.additional_steps is not None:
+        print("Error: --additional-steps requires an existing session.", file=sys.stderr)
+        return EXIT_USAGE
+    if not resuming and (args.approve_pending or args.deny_pending):
+        print("Error: pending-action decisions require an existing session.", file=sys.stderr)
+        return EXIT_USAGE
+    if resuming and args.max_steps is not None:
+        print("Error: --max-steps applies only to new sessions.", file=sys.stderr)
+        return EXIT_USAGE
+
     if args.interactive:
         print("Swoon Code interactive agent")
-        print("Enter a coding task at swoon>. Type /quit to end this session.")
+        print("Enter a coding task at swoon>. Type /quit to pause this session.")
 
     if session is not None:
         print(f"Session: {session.id}")
@@ -504,7 +544,11 @@ def _run_agent(args: argparse.Namespace) -> int:
             session = manager.create(
                 args.project,
                 max_steps=args.max_steps or DEFAULT_MAX_STEPS,
-                session_id=args.session_id,
+                session_id=(
+                    session_id_for_workspace(args.name)
+                    if args.name is not None
+                    else args.session_id
+                ),
             )
         except Exception as error:
             _report_error(error)
@@ -601,6 +645,9 @@ def _drive_agent_outcome(
                     outcome.session,
                     reason=ProcessTerminationReason.SESSION_END,
                 )
+                if console and answer == "/quit":
+                    print(f"Session {outcome.session.id} paused. Resume it with the same name.")
+                    return EXIT_SUCCESS
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
                 print("Session aborted by the user.", file=sys.stderr)
                 return EXIT_ABORTED
@@ -753,8 +800,9 @@ def _read_pending_confirmation(session: Session) -> tuple[bool | None, bool]:
 
 
 def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:
+    cookie_path = Path(args.cookies).expanduser() if args.cookies else _default_cookie_path()
     return ChatGPTWebTransport(
-        args.cookies,
+        cookie_path,
         verbose=args.verbose,
         headless=not args.headed,
         response_timeout=args.timeout,
@@ -861,7 +909,38 @@ def _report_error(error: Exception) -> None:
 def _normalize_legacy_args(argv: Sequence[str]) -> list[str]:
     if not argv or argv[0] in _COMMANDS or argv[0] in {"-h", "--help", "--version"}:
         return list(argv)
-    return ["chat", *argv]
+    if argv[0].startswith("-"):
+        return ["chat", *argv]
+    return ["agent", "--interactive", "--name", argv[0], *argv[1:]]
+
+
+def _session_manager(args: argparse.Namespace) -> SessionManager:
+    session_dir = getattr(args, "session_dir", None)
+    if session_dir is not None:
+        return SessionManager(session_dir)
+    return WorkspaceSessionManager(getattr(args, "work_dir", None))
+
+
+def _session_reference(manager: SessionManager, value: str) -> str:
+    if isinstance(manager, WorkspaceSessionManager) and not value.startswith("sess_"):
+        return session_id_for_workspace(value)
+    return value
+
+
+def _default_cookie_path() -> Path:
+    configured = os.environ.get("SWOON_COOKIE_FILE")
+    if configured:
+        return Path(configured).expanduser().absolute()
+    if os.name == "nt":
+        parent = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+        if parent:
+            return Path(parent) / "Swoon Code" / "cookies.json"
+        return Path.home() / "AppData" / "Roaming" / "Swoon Code" / "cookies.json"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Swoon Code" / "cookies.json"
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    parent = Path(xdg_config_home) if xdg_config_home else Path.home() / ".config"
+    return parent / "swoon-code" / "cookies.json"
 
 
 def _positive_timeout(value: str) -> float:

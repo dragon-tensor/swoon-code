@@ -395,14 +395,15 @@ class CLITests(unittest.TestCase):
         )
 
         session = SessionManager(self.sessions).load(session_id)
-        self.assertEqual(code, EXIT_ABORTED)
-        self.assertEqual(session.state.status, SessionStatus.ABORTED)
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertEqual(session.state.status, SessionStatus.WAITING_USER)
         self.assertEqual(session.state.step, 2)
         self.assertIn("Swoon Code interactive agent", stdout)
         self.assertIn("Initial task complete.", stdout)
         self.assertIn("Follow-up complete.", stdout)
         self.assertIn("<user_prompt>Add type hints</user_prompt>", browser.prompts[1])
-        self.assertIn("aborted by the user", stderr)
+        self.assertIn("paused", stdout)
+        self.assertEqual(stderr, "")
 
     def test_noninteractive_exit_stops_live_background_process(self) -> None:
         if not self.background_runtime_available():

@@ -25,7 +25,6 @@ from build_wheel import (
 
 
 ROOT_FILES = (
-    ".gitignore",
     "CHANGELOG.md",
     "CONTRIBUTING.md",
     "LICENSE",
@@ -42,12 +41,15 @@ ROOT_FILES = (
     "cookies.example.json",
     "pyproject.toml",
 )
+REPOSITORY_ROOT_FILES = (".gitignore",)
 SOURCE_DIRECTORIES = {
-    ".github": frozenset({".yml", ".yaml"}),
     "docs": frozenset({".md"}),
     "scripts": frozenset({".py"}),
     "swoon": frozenset({".py", ".typed"}),
     "tests": frozenset({".py", ".json"}),
+}
+REPOSITORY_SOURCE_DIRECTORIES = {
+    ".github": frozenset({".yml", ".yaml"}),
 }
 MAX_SOURCE_FILES = 2_000
 MAX_SOURCE_FILE_BYTES = 8 * 1024 * 1024
@@ -73,8 +75,7 @@ def build_sdist(project_root: Path, output_directory: Path) -> Path:
 
     payloads: dict[str, tuple[bytes, int]] = {}
     total_bytes = 0
-    for source in _source_files(root):
-        relative = source.relative_to(root).as_posix()
+    for relative, source in _source_files(root):
         payload = source.read_bytes()
         if len(payload) > MAX_SOURCE_FILE_BYTES:
             raise ValueError(f"Source file exceeds 8 MiB: {relative}")
@@ -129,38 +130,70 @@ def build_sdist(project_root: Path, output_directory: Path) -> Path:
     return target
 
 
-def _source_files(root: Path) -> tuple[Path, ...]:
-    selected: list[Path] = []
+def _source_files(root: Path) -> tuple[tuple[str, Path], ...]:
+    selected: list[tuple[str, Path]] = []
     for relative in ROOT_FILES:
         source = root / relative
         _validate_source_file(source, root)
-        selected.append(source)
+        selected.append((relative, source))
 
     for directory_name, suffixes in SOURCE_DIRECTORIES.items():
-        directory = root / directory_name
-        if directory.is_symlink() or not directory.is_dir():
-            raise ValueError(f"Required source directory is invalid: {directory_name}")
-        for source in sorted(directory.rglob("*")):
-            relative = source.relative_to(root)
-            if source.is_symlink():
-                raise ValueError(f"Source distribution cannot contain a symlink: {relative}")
-            details = source.stat(follow_symlinks=False)
-            if stat.S_ISDIR(details.st_mode):
-                continue
-            if "__pycache__" in source.parts or source.suffix == ".pyc":
-                continue
-            if not stat.S_ISREG(details.st_mode):
-                raise ValueError(f"Source distribution cannot contain a special file: {relative}")
-            if source.suffix not in suffixes:
-                raise ValueError(f"Unrecognized source file: {relative}")
-            selected.append(source)
+        selected.extend(_source_directory(root, directory_name, suffixes))
+
+    repository_root = _repository_source_root(root)
+    for relative in REPOSITORY_ROOT_FILES:
+        source = repository_root / relative
+        _validate_source_file(source, repository_root)
+        selected.append((relative, source))
+    for directory_name, suffixes in REPOSITORY_SOURCE_DIRECTORIES.items():
+        selected.extend(_source_directory(repository_root, directory_name, suffixes))
 
     if len(selected) > MAX_SOURCE_FILES:
         raise ValueError(f"Source distribution exceeds {MAX_SOURCE_FILES} files")
-    relative_names = [source.relative_to(root).as_posix() for source in selected]
+    relative_names = [relative for relative, _ in selected]
     if len(relative_names) != len(set(relative_names)):
         raise ValueError("Source distribution contains duplicate file paths")
-    return tuple(sorted(selected))
+    return tuple(sorted(selected, key=lambda item: item[0]))
+
+
+def _source_directory(
+    source_root: Path,
+    directory_name: str,
+    suffixes: frozenset[str],
+) -> tuple[tuple[str, Path], ...]:
+    selected: list[tuple[str, Path]] = []
+    directory = source_root / directory_name
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValueError(f"Required source directory is invalid: {directory_name}")
+    for source in sorted(directory.rglob("*")):
+        relative = source.relative_to(source_root)
+        if source.is_symlink():
+            raise ValueError(f"Source distribution cannot contain a symlink: {relative}")
+        details = source.stat(follow_symlinks=False)
+        if stat.S_ISDIR(details.st_mode):
+            continue
+        if "__pycache__" in source.parts or source.suffix == ".pyc":
+            continue
+        if not stat.S_ISREG(details.st_mode):
+            raise ValueError(f"Source distribution cannot contain a special file: {relative}")
+        if source.suffix not in suffixes:
+            raise ValueError(f"Unrecognized source file: {relative}")
+        selected.append((relative.as_posix(), source))
+    return tuple(selected)
+
+
+def _repository_source_root(project_root: Path) -> Path:
+    """Locate checkout-only metadata in this layout or an unpacked sdist."""
+
+    candidates = (project_root, project_root.parent)
+    for candidate in candidates:
+        files_exist = all((candidate / relative).is_file() for relative in REPOSITORY_ROOT_FILES)
+        directories_exist = all(
+            (candidate / relative).is_dir() for relative in REPOSITORY_SOURCE_DIRECTORIES
+        )
+        if files_exist and directories_exist:
+            return candidate
+    raise ValueError("Repository release metadata is missing")
 
 
 def _validate_source_file(source: Path, root: Path) -> None:

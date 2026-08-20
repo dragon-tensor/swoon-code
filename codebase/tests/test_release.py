@@ -19,6 +19,7 @@ import swoon
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = PROJECT_ROOT.parent
 BUILD_SCRIPT = PROJECT_ROOT / "scripts" / "build_wheel.py"
 SMOKE_SCRIPT = PROJECT_ROOT / "scripts" / "smoke_wheel.py"
 BUILD_SDIST_SCRIPT = PROJECT_ROOT / "scripts" / "build_sdist.py"
@@ -300,10 +301,10 @@ class ConsumerReleaseTests(unittest.TestCase):
             self.assertIn(f"exactly v{VERSION}", completed.stderr)
 
     def test_workflows_keep_credentials_out_of_automation(self) -> None:
-        continuous = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(
+        continuous = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(
             encoding="utf-8"
         )
-        release = (PROJECT_ROOT / ".github/workflows/release.yml").read_text(
+        release = (REPOSITORY_ROOT / ".github/workflows/release.yml").read_text(
             encoding="utf-8"
         )
         combined = continuous + release

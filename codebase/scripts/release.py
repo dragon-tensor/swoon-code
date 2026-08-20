@@ -21,6 +21,7 @@ from build_wheel import (
     project_version,
 )
 
+REPOSITORY_ROOT = PROJECT_ROOT.parent
 
 MEDIA_TYPES = {
     ".whl": "application/vnd.pypi.wheel+zip",
@@ -49,7 +50,7 @@ def assemble_release(
         _verify_tag(expected_tag, version, state["commit"])
 
     output = output_directory.resolve()
-    git_metadata = PROJECT_ROOT / ".git"
+    git_metadata = REPOSITORY_ROOT / ".git"
     if (
         output == PROJECT_ROOT
         or output == git_metadata

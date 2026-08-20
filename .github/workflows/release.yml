@@ -11,6 +11,10 @@ permissions:
   attestations: write
   artifact-metadata: write
 
+defaults:
+  run:
+    working-directory: codebase
+
 jobs:
   release:
     name: Verify and draft release
@@ -28,11 +32,11 @@ jobs:
       - name: Attest release artifacts
         uses: actions/attest@v4
         with:
-          subject-path: dist/*
+          subject-path: codebase/dist/*
       - uses: actions/upload-artifact@v7
         with:
           name: swoon-${{ github.ref_name }}
-          path: dist/
+          path: codebase/dist/
           if-no-files-found: error
       - name: Create draft GitHub release
         env:

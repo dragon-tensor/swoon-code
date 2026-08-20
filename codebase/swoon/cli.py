@@ -40,7 +40,7 @@ EXIT_RUNTIME_ERROR = 5
 EXIT_INPUT_REQUIRED = 6
 EXIT_INTERRUPTED = 130
 
-_COMMANDS = frozenset({"chat", "agent", "doctor", "session"})
+_COMMANDS = frozenset({"auth", "chat", "agent", "doctor", "session"})
 _ABORT_COMMANDS = frozenset({"/abort", "/quit"})
 
 
@@ -70,6 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="also launch and close Chromium instead of checking installation only",
     )
     doctor.set_defaults(handler=_run_doctor)
+
+    auth = commands.add_parser(
+        "auth",
+        help="open Chromium for one-time human verification and refresh private session state",
+    )
+    _add_browser_arguments(auth, headed_by_default=True)
+    auth.set_defaults(handler=_run_auth, verbose=True)
 
     session_command = commands.add_parser(
         "session",
@@ -120,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat.set_defaults(handler=_run_chat)
 
     agent = commands.add_parser("agent", help="run a bounded AEML coding session")
-    _add_browser_arguments(agent)
+    _add_browser_arguments(agent, headed_by_default=True)
     agent.add_argument("--prompt", "-p", help="initial task or answer for a resumed session")
     source = agent.add_mutually_exclusive_group()
     source.add_argument("--project", help="copy a project into a new session's input root")
@@ -255,6 +262,32 @@ def _run_doctor(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
+def _run_auth(args: argparse.Namespace) -> int:
+    """Refresh configured browser state after explicit human verification."""
+
+    cookie_path = Path(args.cookies).expanduser() if args.cookies else _default_cookie_path()
+    client: ChatGPTWebTransport | None = None
+    exit_code = EXIT_RUNTIME_ERROR
+    print("Opening Chromium for ChatGPT verification...")
+    try:
+        client = _transport(args)
+        client.start()
+        client.storage_state_path = cookie_path
+        exit_code = EXIT_SUCCESS
+    except Exception as error:
+        _report_error(error)
+    if client is not None:
+        try:
+            client.close()
+        except Exception as error:
+            _report_error(error)
+            exit_code = EXIT_RUNTIME_ERROR
+    if exit_code == EXIT_SUCCESS:
+        print("Authentication verified and private browser state refreshed.")
+        print("You can now run: swoon")
+    return exit_code
+
+
 def _run_session_list(args: argparse.Namespace) -> int:
     try:
         manager = _session_manager(args)
@@ -351,13 +384,30 @@ def _run_session_delete(args: argparse.Namespace) -> int:
     return EXIT_SUCCESS
 
 
-def _add_browser_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_browser_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    headed_by_default: bool = False,
+) -> None:
     parser.add_argument(
         "--cookies",
         help="ChatGPT cookie JSON (defaults to the configured setup location)",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
-    parser.add_argument("--headed", action="store_true", help="show the browser window")
+    visibility = parser.add_mutually_exclusive_group()
+    visibility.add_argument(
+        "--headed",
+        dest="headed",
+        action="store_true",
+        help="show the browser window (default for the coding agent)",
+    )
+    visibility.add_argument(
+        "--headless",
+        dest="headed",
+        action="store_false",
+        help="hide the browser window; human verification cannot be completed",
+    )
+    parser.set_defaults(headed=headed_by_default)
     parser.add_argument(
         "--save-storage-state",
         metavar="PATH",
@@ -559,7 +609,9 @@ def _run_agent(args: argparse.Namespace) -> int:
     try:
         if client is None:
             client = _transport(args)
+        print("Connecting to ChatGPT...", flush=True)
         client.start()
+        print("Connected. The coding agent is working...", flush=True)
         prompt_builder = AEMLPromptBuilder(dispatcher.tool_specs)
         orchestrator = AgentOrchestrator(
             manager,

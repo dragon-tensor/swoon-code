@@ -50,7 +50,7 @@ class ConsumerLayoutTests(unittest.TestCase):
             required,
         )
 
-    def test_unix_setup_scripts_parse_and_only_dev_launcher_is_headed(self) -> None:
+    def test_unix_setup_scripts_parse_and_dev_launcher_enables_diagnostics(self) -> None:
         shell = shutil.which("sh")
         scripts = tuple(sorted(SETUP_ROOT.rglob("*.sh")))
         if shell is not None:

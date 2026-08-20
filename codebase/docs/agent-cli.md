@@ -49,8 +49,11 @@ named interactive agent with:
 swoon NAME
 ```
 
-With no name, `swoon` uses the `default` workspace. Both commands are headless. The matching output
-is always visible at `work/output/NAME/`; internal state remains hidden under `work/.sessions/`.
+With no name, `swoon` uses the `default` workspace. Both commands keep a visible Chromium window
+alive for the interactive session so a Cloudflare human-verification check can be completed. The
+matching output is always visible at `work/output/NAME/`; internal state remains hidden under
+`work/.sessions/`. Use `--headless` only when the environment can load ChatGPT without a human
+check.
 
 The expanded developer interface remains available:
 
@@ -72,7 +75,9 @@ options are:
 - `--max-steps N` — set the initial budget from 1 through 10,000;
 - `--protocol-retries N` — allow 0 through 10 AEML repair attempts after the original response;
 - `--interactive` — keep one session open and accept successive coding tasks at `swoon>`;
-- `--headed` and `--verbose` — expose the browser and transport diagnostics;
+- `--headed` — explicitly select the agent's default visible-browser mode;
+- `--headless` — hide the browser, with no ability to complete a human-verification check;
+- `--verbose` — expose transport diagnostics;
 - `--save-storage-state PATH` — explicitly persist refreshed credentials with owner-only mode;
 - `--debug-artifacts DIRECTORY` — explicitly allow uniquely named private startup screenshots;
 - `--timeout SECONDS` — set the positive maximum wait for a complete response;

@@ -10,6 +10,11 @@ Windows:     setup\windows\install.cmd -Cookies C:\path\to\cookies.json
 ```
 
 After opening a new terminal, `swoon` starts the default interactive coding agent and
-`swoon NAME` creates or resumes a named workspace. Consumer launches are headless. Developers can
-use `setup/dev/start-headed.sh NAME` or `setup/dev/start-headed.ps1 NAME` to expose the browser and
-transport logs.
+`swoon NAME` creates or resumes a named workspace. The agent opens Chromium and keeps it alive for
+the terminal session so the user can complete a human-verification check. `/quit` closes it. The
+development scripts enable the same visible mode with verbose transport logs.
+
+If ChatGPT presents a Cloudflare human-verification check, run `swoon auth` once. This explicit
+command opens Chromium so the user can refresh the private configured browser state separately,
+then closes the window. It does not automate or bypass the verification. `swoon NAME --headless`
+is an explicit opt-in for environments where no human check is presented.

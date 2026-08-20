@@ -103,11 +103,22 @@ class FakeBrowser:
 
 
 class FakeStartPage(FakePage):
-    def __init__(self, *, selector_found: bool = True, logged_out: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        selector_found: bool = True,
+        logged_out: bool = False,
+        cloudflare_challenge: bool = False,
+    ) -> None:
         super().__init__([])
         self.selector_found = selector_found
         self.logged_out = logged_out
-        self.url = "https://chatgpt.com/"
+        self.cloudflare_challenge = cloudflare_challenge
+        self.url = (
+            "https://chatgpt.com/?__cf_chl_rt_tk=test"
+            if cloudflare_challenge
+            else "https://chatgpt.com/"
+        )
         self.goto_calls: list[tuple[str, str]] = []
         self.waited: list[str] = []
         self.default_timeout: int | None = None
@@ -123,13 +134,17 @@ class FakeStartPage(FakePage):
         return "ChatGPT"
 
     def query_selector(self, selector: str):
+        if self.selector_found and selector == "#prompt-textarea":
+            return FakePromptElement()
         if self.logged_out and selector == "button:has-text('Log in')":
+            return FakeVisibleElement()
+        if self.cloudflare_challenge and selector == ".cf-turnstile":
             return FakeVisibleElement()
         return None
 
     def wait_for_selector(self, selector: str, *, timeout: int):
         self.waited.append(selector)
-        if self.selector_found:
+        if self.selector_found or self.cloudflare_challenge:
             return object()
         raise TimeoutError("missing")
 
@@ -614,6 +629,39 @@ class ChatGPTWebTransportTests(unittest.TestCase):
                 transport.close()
 
         self.assertEqual(page.screenshot_calls, [])
+
+    def test_headless_start_reports_cloudflare_human_verification_immediately(self) -> None:
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "secret",
+                    "domain": ".chatgpt.com",
+                    "path": "/",
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            cookie_path = Path(directory) / "cookies.json"
+            cookie_path.write_text(json.dumps(state), encoding="utf-8")
+            cookie_path.chmod(0o600)
+            page = FakeStartPage(selector_found=False, cloudflare_challenge=True)
+            browser = FakeLaunchedBrowser(page)
+            manager = FakePlaywrightManager(FakeChromium(browser))
+            sync_api = types.ModuleType("playwright.sync_api")
+            sync_api.sync_playwright = lambda: manager
+            playwright = types.ModuleType("playwright")
+
+            with patch.dict(
+                sys.modules,
+                {"playwright": playwright, "playwright.sync_api": sync_api},
+            ):
+                transport = ChatGPTWebTransport(cookie_path)
+                with self.assertRaisesRegex(RuntimeError, "Run `swoon auth`"):
+                    transport.start()
+                transport.close()
+
+        self.assertEqual(page.waited, [])
 
     def test_start_rejects_logged_out_page_with_private_debug_capture(self) -> None:
         if os.name != "posix":

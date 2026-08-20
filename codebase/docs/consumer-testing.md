@@ -19,8 +19,14 @@ swoon demo
 ```
 
 Windows uses `setup\windows\install.cmd`; macOS uses the same top-level `setup/install.sh` as
-Linux. Normal consumer sessions run the browser headlessly. Developers can opt into a visible
-browser with `setup/dev/start-headed.sh demo` or its PowerShell counterpart.
+Linux. Normal coding-agent sessions open Chromium and retain the same window until `/quit`, which
+allows a human-verification check to be completed without restarting. The development launchers
+add verbose transport logs.
+
+When a hosted service requires a Cloudflare human-verification check, use `swoon auth`. It opens a
+headed browser only for the user to complete the verification, refreshes the configured private
+browser state, and exits. The adapter never automates the check. `swoon demo --headless` remains
+available as an explicit opt-in and fails immediately with a clear remedy if challenged.
 
 Developers working inside `codebase/` can still use Python's module launcher:
 

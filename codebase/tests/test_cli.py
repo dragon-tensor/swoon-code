@@ -16,6 +16,7 @@ from swoon.cli import (
     EXIT_RUNTIME_ERROR,
     EXIT_SUCCESS,
     EXIT_USAGE,
+    build_parser,
     legacy_main,
     main,
 )
@@ -139,6 +140,17 @@ class CLITests(unittest.TestCase):
         self.assertEqual(raised.exception.code, EXIT_SUCCESS)
         self.assertEqual(stdout.getvalue().strip(), "swoon 0.1.0")
 
+    def test_agent_is_visible_by_default_and_headless_remains_explicit(self) -> None:
+        parser = build_parser()
+
+        visible = parser.parse_args(["agent"])
+        hidden = parser.parse_args(["agent", "--headless"])
+        chat = parser.parse_args(["chat", "--prompt", "hello"])
+
+        self.assertTrue(visible.headed)
+        self.assertFalse(hidden.headed)
+        self.assertFalse(chat.headed)
+
     def test_doctor_reports_consumer_and_optional_sandbox_readiness(self) -> None:
         browser = FakeBrowserTransport([])
         with (
@@ -186,6 +198,22 @@ class CLITests(unittest.TestCase):
         self.assertIn("[fail] Cookie file", stdout)
         self.assertIn("Consumer check failed", stderr)
         self.assertNotIn("Install Chromium", stderr)
+
+    def test_auth_opens_headed_transport_and_refreshes_selected_cookie_state(self) -> None:
+        browser = FakeBrowserTransport([])
+        cookie_path = self.root / "cookies.json"
+
+        code, stdout, stderr = self.invoke(
+            ["auth", "--cookies", str(cookie_path)],
+            browser,
+        )
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertTrue(browser.started)
+        self.assertTrue(browser.closed)
+        self.assertEqual(browser.storage_state_path, cookie_path)
+        self.assertIn("Authentication verified", stdout)
+        self.assertEqual(stderr, "")
 
     def test_session_commands_list_show_export_and_delete_completed_output(self) -> None:
         manager = SessionManager(self.sessions)

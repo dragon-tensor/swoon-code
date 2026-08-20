@@ -71,3 +71,4 @@ esac
 echo "Swoon Code is installed."
 echo "Open a new terminal and run: swoon"
 echo "For a named workspace run: swoon my-project"
+echo "The agent keeps Chromium open for human verification; optional refresh: swoon auth"

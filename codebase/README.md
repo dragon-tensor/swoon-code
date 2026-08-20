@@ -95,7 +95,7 @@ The repository has three visible product roots:
 
 ```text
 codebase/                application source, tests, docs, and release tooling
-setup/                   Linux, macOS, Windows, and headed-development launchers
+setup/                   Linux, macOS, Windows, and development launchers
 work/input/<name>/       files supplied by the user for one named session
 work/output/<name>/      files written by the agent for that same session
 ```
@@ -122,10 +122,15 @@ swoon my-project
 
 Before the first launch of `swoon my-project`, place any source files in
 `work/input/my-project/`. Swoon creates `work/output/my-project/` and writes only there. Running the
-same command later resumes the same agent session. Consumer mode uses a headless browser, so no
-ChatGPT window opens.
+same command later resumes the same agent session. The coding agent opens Chromium by default and
+keeps that same window alive in the background for the entire terminal session. This lets the user
+complete any human-verification check without restarting the agent. `/quit` closes the browser.
 
-Developers who explicitly want the visible browser and transport logs can run:
+The terminal prints connection progress and tells the user when action is required in the browser.
+`swoon auth` remains available as a separate one-time state refresh. For an unattended environment
+that does not receive a human challenge, `swoon NAME --headless` explicitly hides the window.
+
+Developers who also want verbose transport logs can run:
 
 ```bash
 ./setup/dev/start-headed.sh my-project

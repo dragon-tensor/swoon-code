@@ -60,3 +60,4 @@ if (($userPath -split ";") -notcontains $launcherDir) {
 Write-Host "Swoon Code is installed."
 Write-Host "Open a new terminal and run: swoon"
 Write-Host "For a named workspace run: swoon my-project"
+Write-Host "The agent keeps Chromium open for human verification; optional refresh: swoon auth"

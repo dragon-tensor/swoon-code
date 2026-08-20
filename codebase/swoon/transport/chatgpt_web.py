@@ -52,6 +52,11 @@ TEXTAREA_SELECTORS = (
     "[contenteditable='plaintext-only']",
     "[role='textbox']",
 )
+CLOUDFLARE_CHALLENGE_SELECTORS = (
+    "iframe[src*='challenges.cloudflare.com']",
+    "[name='cf-turnstile-response']",
+    ".cf-turnstile",
+)
 LOGGED_OUT_SELECTORS = (
     "button[data-testid='login-button']",
     "a[data-testid='login-button']",
@@ -293,11 +298,6 @@ class ChatGPTWebTransport:
 
         self.log("Navigating to chatgpt.com...")
         self.page.goto(CHATGPT_URL, wait_until="domcontentloaded")
-        for _ in range(60):
-            if "just a moment" not in self.page.title().lower():
-                break
-            time.sleep(2)
-
         self.log(f"Page: {self.page.url}")
         self._dismiss_modals()
         if "login" in self.page.url.lower():
@@ -311,18 +311,90 @@ class ChatGPTWebTransport:
                 f"https://chatgpt.com/.{self._startup_debug_note()}"
             )
 
-        for selector in TEXTAREA_SELECTORS:
-            try:
-                self.page.wait_for_selector(selector, timeout=5_000)
-                self.log("Chat input found")
+        if self._cloudflare_challenge_visible():
+            self._wait_for_human_verification()
+
+        startup_selector = ", ".join(
+            (*TEXTAREA_SELECTORS, *CLOUDFLARE_CHALLENGE_SELECTORS)
+        )
+        try:
+            self.page.wait_for_selector(
+                startup_selector,
+                timeout=min(int(self.response_timeout * 1_000), 60_000),
+            )
+        except Exception:
+            pass
+
+        if self._visible_composer() is not None:
+            self.log("Chat input found")
+            return
+        if self._cloudflare_challenge_visible():
+            self._wait_for_human_verification()
+            if self._visible_composer() is not None:
+                self.log("Chat input found after human verification")
                 return
-            except Exception:
-                continue
+        if self._is_logged_out():
+            raise RuntimeError(
+                "ChatGPT session is not authenticated. Run `swoon auth` with an authorized "
+                f"account and try again.{self._startup_debug_note()}"
+            )
 
         raise RuntimeError(
             "ChatGPT message composer was not found; the page may have changed or still be "
             f"loading.{self._startup_debug_note()}"
         )
+
+    def _visible_composer(self) -> Any | None:
+        if self.page is None:
+            return None
+        for selector in TEXTAREA_SELECTORS:
+            try:
+                element = self.page.query_selector(selector)
+                if element and element.is_visible():
+                    return element
+            except Exception:
+                continue
+        return None
+
+    def _cloudflare_challenge_visible(self) -> bool:
+        if self.page is None:
+            return False
+        if "__cf_chl_" in self.page.url:
+            return True
+        for selector in CLOUDFLARE_CHALLENGE_SELECTORS:
+            try:
+                element = self.page.query_selector(selector)
+                if element and element.is_visible():
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _wait_for_human_verification(self) -> None:
+        if self.page is None:
+            raise RuntimeError("Transport has not been started")
+        if self.headless:
+            raise RuntimeError(
+                "Cloudflare requires human verification, which cannot be completed in headless "
+                "mode. Run `swoon auth`, complete the verification in the opened browser, then "
+                f"run the agent again.{self._startup_debug_note()}"
+            )
+        print(
+            "[chatgpt] Complete the human-verification check in the open browser window.",
+            file=sys.stderr,
+            flush=True,
+        )
+        self.log("Cloudflare verification is visible; waiting for the human in the browser")
+        try:
+            self.page.wait_for_selector(
+                ", ".join(TEXTAREA_SELECTORS),
+                timeout=int(self.response_timeout * 1_000),
+            )
+        except Exception as error:
+            raise RuntimeError(
+                "Human verification was not completed before the startup timeout."
+                f"{self._startup_debug_note()}"
+            ) from error
 
     def _is_logged_out(self) -> bool:
         if self.page is None:
@@ -399,12 +471,7 @@ class ChatGPTWebTransport:
         previous_count = len(old_messages)
         previous_text = old_messages[-1].inner_text() if old_messages else ""
 
-        prompt = None
-        for selector in TEXTAREA_SELECTORS:
-            element = self.page.query_selector(selector)
-            if element and element.is_visible():
-                prompt = element
-                break
+        prompt = self._visible_composer()
         if prompt is None:
             raise RuntimeError("Chat input not found")
 

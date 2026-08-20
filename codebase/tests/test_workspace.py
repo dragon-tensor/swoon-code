@@ -90,7 +90,7 @@ class WorkspaceSessionManagerTests(unittest.TestCase):
         self.assertFalse(session.paths.host_input.exists())
         self.assertFalse(session.paths.host_output.exists())
 
-    def test_short_cli_name_starts_and_pauses_headless_agent_session(self) -> None:
+    def test_short_cli_name_keeps_visible_browser_for_interactive_session(self) -> None:
         browser = FakeBrowserTransport(
             [
                 (
@@ -122,7 +122,7 @@ class WorkspaceSessionManagerTests(unittest.TestCase):
         self.assertIn("Created the requested script.", stdout.getvalue())
         self.assertIn("paused", stdout.getvalue())
         self.assertEqual(stderr.getvalue(), "")
-        self.assertTrue(transport.call_args.kwargs["headless"])
+        self.assertFalse(transport.call_args.kwargs["headless"])
         self.assertTrue(browser.closed)
 
 

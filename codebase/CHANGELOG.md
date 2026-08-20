@@ -18,6 +18,8 @@ tagged; the `0.x` series remains experimental and may introduce breaking changes
   incomplete prompts as separate messages.
 - Add a persistent `swoon agent --interactive` terminal console for successive coding tasks in one
   session.
+- Add a minimal ANSI terminal hierarchy with stable user/agent prompts, visible plans and tool
+  lifecycle events, severity colors, plain-text fallback, and `NO_COLOR` support.
 - Detect Cloudflare human-verification pages immediately, keep a visible browser alive by default
   for interactive agents, retain explicit `--headless` and `swoon auth` modes, and show connection
   progress instead of leaving sessions apparently frozen.

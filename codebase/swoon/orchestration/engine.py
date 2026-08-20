@@ -17,11 +17,13 @@ from swoon.aeml import (
 from swoon.aeml.models import (
     AEMLMessage,
     NextDirective,
+    PathRef,
     ProtocolError,
     Result,
     ResultStatus,
     SystemNotice,
     ToolEffect,
+    ValidatedAction,
     ValidatedMessage,
 )
 from swoon.session import (
@@ -41,7 +43,13 @@ from swoon.tools import (
 from swoon.transport import AEMLChatChannel
 
 from .errors import OrchestrationError
-from .models import OrchestrationLimits, RunResult, RunStopReason
+from .models import (
+    OrchestrationEvent,
+    OrchestrationEventKind,
+    OrchestrationLimits,
+    RunResult,
+    RunStopReason,
+)
 
 
 class AEMLOrchestrator:
@@ -60,6 +68,7 @@ class AEMLOrchestrator:
         context_builder: AEMLContextBuilder | None = None,
         limits: OrchestrationLimits | None = None,
         message_sink: Callable[[str], None] | None = None,
+        event_sink: Callable[[OrchestrationEvent], None] | None = None,
         keep_alive: bool = False,
     ) -> None:
         if not isinstance(session_manager, SessionManager):
@@ -79,6 +88,8 @@ class AEMLOrchestrator:
             raise TypeError("limits must be OrchestrationLimits or null")
         if message_sink is not None and not callable(message_sink):
             raise TypeError("message_sink must be callable or null")
+        if event_sink is not None and not callable(event_sink):
+            raise TypeError("event_sink must be callable or null")
         if type(keep_alive) is not bool:
             raise TypeError("keep_alive must be boolean")
 
@@ -99,6 +110,7 @@ class AEMLOrchestrator:
         self.context_builder = selected_context_builder
         self.limits = selected_limits
         self.message_sink = message_sink
+        self.event_sink = event_sink
         self.keep_alive = keep_alive
         self._run_lock = Lock()
 
@@ -169,7 +181,7 @@ class AEMLOrchestrator:
             pending = session.state.pending_confirmation
             assert pending is not None
             if confirmation:
-                response = self.dispatcher.execute(action, session, confirmed=True)
+                response = self._execute_action(action, session, confirmed=True)
                 if isinstance(response, ProtocolError):
                     self.session_manager.clear_pending_confirmation(session)
                     pending_errors = (response,)
@@ -194,6 +206,7 @@ class AEMLOrchestrator:
                     action_digest=self.dispatcher.action_digest(action),
                     resolve_confirmation=True,
                 )
+                self._publish_action_response(action, denial)
                 next_user_prompt = user_prompt or (
                     f"The human denied pending action {action.source.id!r}. Continue safely."
                 )
@@ -259,16 +272,20 @@ class AEMLOrchestrator:
             source = message.source
 
             if source.plan is not None and source.plan != session.state.plan:
+                self._publish_event(
+                    OrchestrationEvent(OrchestrationEventKind.PLAN, source.plan)
+                )
                 self.session_manager.set_plan(session, source.plan)
 
             if source.say is not None:
                 updates.append(source.say)
+                self._publish_updates(source.say)
 
             if source.complete is not None:
                 if self.keep_alive:
                     question = "Task complete. Enter the next instruction or /quit."
                     self.session_manager.set_status(session, SessionStatus.WAITING_USER)
-                    self._publish_updates(source.say, source.complete, question)
+                    self._publish_updates(source.complete, question)
                     return RunResult(
                         session=session,
                         reason=RunStopReason.AWAITING_USER,
@@ -278,7 +295,7 @@ class AEMLOrchestrator:
                         last_turn=self.channel.last_turn,
                     )
                 self._set_terminal_status(session, SessionStatus.COMPLETED)
-                self._publish_updates(source.say, source.complete)
+                self._publish_updates(source.complete)
                 return RunResult(
                     session=session,
                     reason=RunStopReason.COMPLETED,
@@ -289,7 +306,7 @@ class AEMLOrchestrator:
 
             if source.ask_user is not None:
                 self.session_manager.set_status(session, SessionStatus.WAITING_USER)
-                self._publish_updates(source.say, source.ask_user)
+                self._publish_updates(source.ask_user)
                 return RunResult(
                     session=session,
                     reason=RunStopReason.AWAITING_USER,
@@ -302,7 +319,7 @@ class AEMLOrchestrator:
                 if self.keep_alive:
                     question = "Turn complete. Enter the next instruction or /quit."
                     self.session_manager.set_status(session, SessionStatus.WAITING_USER)
-                    self._publish_updates(source.say, question)
+                    self._publish_updates(question)
                     return RunResult(
                         session=session,
                         reason=RunStopReason.AWAITING_USER,
@@ -311,7 +328,6 @@ class AEMLOrchestrator:
                         last_turn=self.channel.last_turn,
                     )
                 self._set_terminal_status(session, SessionStatus.COMPLETED)
-                self._publish_updates(source.say)
                 return RunResult(
                     session=session,
                     reason=RunStopReason.DONE,
@@ -321,7 +337,6 @@ class AEMLOrchestrator:
 
             if source.next is NextDirective.ABORT:
                 self._set_terminal_status(session, SessionStatus.ABORTED)
-                self._publish_updates(source.say)
                 return RunResult(
                     session=session,
                     reason=RunStopReason.ABORTED,
@@ -350,15 +365,22 @@ class AEMLOrchestrator:
                             confirmation_request.reason,
                             confirmation_request.guard,
                         )
-                        self._publish_updates(source.say)
+                        self._publish_event(
+                            self._action_event(
+                                OrchestrationEventKind.ACTION_PENDING,
+                                action,
+                                suffix="approval required",
+                            )
+                        )
                         return self._confirmation_result(
                             session,
                             updates=updates,
                         )
                     if isinstance(confirmation_request, ProtocolError):
                         responses.append(confirmation_request)
+                        self._publish_action_response(action, confirmation_request)
                     else:
-                        responses.append(self.dispatcher.execute(action, session))
+                        responses.append(self._execute_action(action, session))
                 pending_errors = tuple(
                     response
                     for response in responses
@@ -372,7 +394,6 @@ class AEMLOrchestrator:
             else:
                 pending_errors = ()
             pending_notices = ()
-            self._publish_updates(source.say)
 
     def _set_terminal_status(
         self,
@@ -428,12 +449,14 @@ class AEMLOrchestrator:
                 retry_notices = notices + (
                     self._repair_notice(failure_type, attempt),
                 )
+                self._publish_retry_warning(error.code, attempt)
             except AEMLValidationError as error:
                 final_action_id = self._safe_action_id(error.action_id)
                 retry_errors = errors + (
                     ProtocolError(error.code, str(error), final_action_id),
                 )
                 retry_notices = notices
+                self._publish_retry_warning(error.code, attempt)
             except (AEMLChannelError, AEMLContextError) as error:
                 raise OrchestrationError(error.code, str(error)) from error
             except Exception as error:
@@ -456,6 +479,18 @@ class AEMLOrchestrator:
                 ("attempt", str(attempt + 1)),
                 ("remaining", str(self.limits.max_protocol_retries - attempt)),
             ),
+        )
+
+    def _publish_retry_warning(self, code: str, attempt: int) -> None:
+        remaining = self.limits.max_protocol_retries - attempt
+        if remaining < 1:
+            return
+        self._publish_event(
+            OrchestrationEvent(
+                OrchestrationEventKind.WARNING,
+                f"ChatGPT returned invalid AEML ({code}); retrying with repair feedback "
+                f"({remaining} remaining).",
+            )
         )
 
     @staticmethod
@@ -580,6 +615,119 @@ class AEMLOrchestrator:
                     f"Human message sink failed ({error.__class__.__name__})",
                 ) from error
 
+    def _execute_action(
+        self,
+        action: ValidatedAction,
+        session: Session,
+        *,
+        confirmed: bool = False,
+    ) -> Result | ProtocolError:
+        self._publish_event(
+            self._action_event(OrchestrationEventKind.ACTION_START, action)
+        )
+        response = self.dispatcher.execute(action, session, confirmed=confirmed)
+        self._publish_action_response(action, response)
+        return response
+
+    def _publish_action_response(
+        self,
+        action: ValidatedAction,
+        response: Result | ProtocolError,
+    ) -> None:
+        if isinstance(response, Result):
+            preview = self._compact(response.body, limit=240)
+            status = response.status
+        else:
+            preview = self._compact(f"{response.code}: {response.message}", limit=240)
+            status = ResultStatus.FAILURE
+        self._publish_event(
+            OrchestrationEvent(
+                OrchestrationEventKind.ACTION_RESULT,
+                preview,
+                action_id=action.source.id,
+                tool=action.spec.name,
+                effect=action.spec.effect,
+                status=status,
+            )
+        )
+
+    def _action_event(
+        self,
+        kind: OrchestrationEventKind,
+        action: ValidatedAction,
+        *,
+        suffix: str | None = None,
+    ) -> OrchestrationEvent:
+        text = self._describe_action(action)
+        if suffix is not None:
+            text = f"{text} — {suffix}"
+        return OrchestrationEvent(
+            kind,
+            text,
+            action_id=action.source.id,
+            tool=action.spec.name,
+            effect=action.spec.effect,
+        )
+
+    @classmethod
+    def _describe_action(cls, action: ValidatedAction) -> str:
+        details: list[str] = []
+        source_path = action.source.path
+        if source_path is not None:
+            details.append(cls._path_label(source_path))
+
+        visible_arguments = {
+            "cmd",
+            "from",
+            "to",
+            "package",
+            "manager",
+            "target",
+            "handle",
+            "ref",
+            "remote",
+            "branch",
+            "name",
+            "mode",
+            "message",
+        }
+        for argument in action.arguments:
+            if argument.name not in visible_arguments:
+                continue
+            value = argument.value
+            rendered = cls._path_label(value) if isinstance(value, PathRef) else str(value)
+            rendered = cls._compact(rendered, limit=160)
+            if rendered:
+                details.append(
+                    rendered if argument.name == "cmd" else f"{argument.name}={rendered}"
+                )
+
+        detail = cls._compact(" ".join(details), limit=220)
+        return action.spec.name if not detail else f"{action.spec.name} — {detail}"
+
+    @staticmethod
+    def _path_label(path: PathRef) -> str:
+        value = path.value.lstrip("/")
+        return path.root.value if value in {"", "."} else f"{path.root.value}/{value}"
+
+    @staticmethod
+    def _compact(value: str, *, limit: int) -> str:
+        compacted = " ".join(value.split())
+        if len(compacted) <= limit:
+            return compacted
+        return f"{compacted[: limit - 1]}…"
+
+    def _publish_event(self, event: OrchestrationEvent) -> None:
+        if self.event_sink is None:
+            return
+        try:
+            self.event_sink(event)
+        except Exception as error:
+            raise OrchestrationError(
+                "event_sink_failed",
+                f"Progress event sink failed ({error.__class__.__name__})",
+            ) from error
+
 
 class ReadOnlyOrchestrator(AEMLOrchestrator):
     """Compatibility facade that permits only the seven read capabilities."""
@@ -593,6 +741,7 @@ class ReadOnlyOrchestrator(AEMLOrchestrator):
         context_builder: AEMLContextBuilder | None = None,
         limits: OrchestrationLimits | None = None,
         message_sink: Callable[[str], None] | None = None,
+        event_sink: Callable[[OrchestrationEvent], None] | None = None,
     ) -> None:
         selected = dispatcher or ReadOnlyToolDispatcher(session_manager)
         if isinstance(selected, AgentToolDispatcher):
@@ -604,6 +753,7 @@ class ReadOnlyOrchestrator(AEMLOrchestrator):
             context_builder=context_builder,
             limits=limits,
             message_sink=message_sink,
+            event_sink=event_sink,
         )
 
 
@@ -619,6 +769,7 @@ class AgentOrchestrator(AEMLOrchestrator):
         context_builder: AEMLContextBuilder | None = None,
         limits: OrchestrationLimits | None = None,
         message_sink: Callable[[str], None] | None = None,
+        event_sink: Callable[[OrchestrationEvent], None] | None = None,
         keep_alive: bool = False,
     ) -> None:
         selected = dispatcher or AgentToolDispatcher(session_manager)
@@ -631,6 +782,7 @@ class AgentOrchestrator(AEMLOrchestrator):
             context_builder=context_builder,
             limits=limits,
             message_sink=message_sink,
+            event_sink=event_sink,
             keep_alive=keep_alive,
         )
 

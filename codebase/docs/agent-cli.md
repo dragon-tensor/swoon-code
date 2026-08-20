@@ -74,7 +74,8 @@ options are:
 - `--session-id sess_NAME` — assign a valid ID instead of generating one;
 - `--max-steps N` — set the initial budget from 1 through 10,000;
 - `--protocol-retries N` — allow 0 through 10 AEML repair attempts after the original response;
-- `--interactive` — keep one session open and accept successive coding tasks at `swoon>`;
+- `--interactive` — keep one session open and accept successive coding tasks at
+  `[user@swoon-code]`;
 - `--headed` — explicitly select the agent's default visible-browser mode;
 - `--headless` — hide the browser, with no ability to complete a human-verification check;
 - `--verbose` — expose transport diagnostics;
@@ -96,9 +97,12 @@ explicit Send click, so its line endings cannot become accidental submissions.
 
 Without `--interactive`, omitting `--prompt` asks once for the initial task before creating a new
 session. `--interactive` starts a persistent terminal coding-agent console instead: each completed
-task returns to `swoon>` in the same session, retaining its output, browser conversation, and
-validated action history. Enter `/quit` to pause it for `swoon NAME` to resume later, or `/abort`
-to make it terminal. The
+task returns to `[user@swoon-code]` in the same session, retaining its output, browser conversation,
+and validated action history. Direct messages use `[swoon-code]`; `-->> [plan]` shows the explicit
+AEML plan, and `>>` shows live tool activity and results. ANSI contrast and red/green/yellow severity
+are enabled on capable terminals; `NO_COLOR=1` keeps the semantic prefixes but disables color. The
+private AEML `<thought>` field is never displayed. Enter `/quit` to pause the session for
+`swoon NAME` to resume later, or `/abort` to make it terminal. The
 `--non-interactive` mode instead requires `--prompt` and returns exit 6 if it is absent.
 
 The CLI prints `Session: sess_...` and the human-side physical output path before browser startup.

@@ -359,6 +359,43 @@ class CLITests(unittest.TestCase):
         self.assertEqual(stderr, "")
         self.assertTrue(browser.closed)
 
+    def test_agent_renders_plan_and_live_tool_progress(self) -> None:
+        session_id = "sess_cli_progress"
+        browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    "<plan>Inspect the input, then report.</plan>"
+                    "<say>Checking the project.</say>"
+                    '<action id="list1"><tool>list-dir</tool>'
+                    '<path root="input">.</path></action>'
+                    "<next>await_result</next></aeml>"
+                ),
+                (
+                    f'<aeml turn="2" session="{session_id}">'
+                    "<complete>Inspection complete.</complete></aeml>"
+                ),
+            ]
+        )
+
+        code, stdout, stderr = self.invoke(
+            self.agent_args(
+                "--session-id",
+                session_id,
+                "--prompt",
+                "Inspect the project",
+            ),
+            browser,
+        )
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn("-->> [plan] Inspect the input, then report.", stdout)
+        self.assertIn("[swoon-code] Checking the project.", stdout)
+        self.assertIn(">> list-dir — input", stdout)
+        self.assertIn(">> [success] list-dir", stdout)
+        self.assertIn("[swoon-code] Inspection complete.", stdout)
+        self.assertEqual(stderr, "")
+
     def test_agent_answers_a_human_question_in_the_same_browser_session(self) -> None:
         session_id = "sess_cli_question"
         browser = FakeBrowserTransport(

@@ -9,6 +9,8 @@ from swoon.aeml import AEMLPromptBuilder
 from swoon.aeml.tool_registry import TOOL_SPECS
 from swoon.orchestration import (
     AgentOrchestrator,
+    OrchestrationEvent,
+    OrchestrationEventKind,
     OrchestrationError,
     ReadOnlyOrchestrator,
     RunStopReason,
@@ -84,10 +86,12 @@ class ReadOnlyOrchestratorTests(unittest.TestCase):
             ]
         )
         published: list[str] = []
+        events: list[OrchestrationEvent] = []
         orchestrator = ReadOnlyOrchestrator(
             self.manager,
             AEMLChatChannel(transport),
             message_sink=published.append,
+            event_sink=events.append,
         )
 
         outcome = orchestrator.run(session, "Inspect the project")
@@ -103,6 +107,22 @@ class ReadOnlyOrchestratorTests(unittest.TestCase):
         self.assertEqual(outcome.session.state.result_history, ("list1",))
         self.assertEqual(published, ["Inspecting.", "Inspection complete."])
         self.assertNotIn("private chain of thought", "\n".join(published))
+        self.assertEqual(
+            [event.kind for event in events],
+            [
+                OrchestrationEventKind.PLAN,
+                OrchestrationEventKind.ACTION_START,
+                OrchestrationEventKind.ACTION_RESULT,
+            ],
+        )
+        self.assertEqual(events[0].text, "1. Inspect the output")
+        self.assertEqual(events[1].text, "list-dir — output")
+        self.assertEqual(events[2].tool, "list-dir")
+        self.assertEqual(events[2].status.value, "success")
+        self.assertNotIn(
+            "private chain of thought",
+            "\n".join(event.text for event in events),
+        )
         self.assertIn('<result id="list1">', transport.prompts[1])
 
     def test_tool_error_is_returned_in_the_next_context(self) -> None:
@@ -134,6 +154,7 @@ class ReadOnlyOrchestratorTests(unittest.TestCase):
 
     def test_parse_repair_reuses_the_same_turn_and_step(self) -> None:
         session = self.manager.create(session_id="sess_parse_retry")
+        events: list[OrchestrationEvent] = []
         transport = FakeTextTransport(
             [
                 "not XML",
@@ -147,6 +168,7 @@ class ReadOnlyOrchestratorTests(unittest.TestCase):
         outcome = ReadOnlyOrchestrator(
             self.manager,
             AEMLChatChannel(transport),
+            event_sink=events.append,
         ).run(session, "Finish")
 
         self.assertEqual(outcome.reason, RunStopReason.COMPLETED)
@@ -155,6 +177,9 @@ class ReadOnlyOrchestratorTests(unittest.TestCase):
         self.assertIn('type="parse_error"', transport.prompts[1])
         self.assertIn('attempt="1"', transport.prompts[1])
         self.assertIn('remaining="2"', transport.prompts[1])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].kind, OrchestrationEventKind.WARNING)
+        self.assertIn("retrying with repair feedback", events[0].text)
 
     def test_truncated_repair_is_distinct_from_generic_parse_feedback(self) -> None:
         session = self.manager.create(session_id="sess_truncated_retry")

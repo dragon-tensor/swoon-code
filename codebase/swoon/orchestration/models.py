@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from swoon.aeml.models import ProtocolError
+from swoon.aeml.models import ProtocolError, ResultStatus, ToolEffect
 from swoon.session.models import Session
 
 
@@ -19,6 +19,28 @@ class RunStopReason(str, Enum):
     STEP_LIMIT = "step_limit"
     ABORTED = "aborted"
     PROTOCOL_ERROR = "protocol_error"
+
+
+class OrchestrationEventKind(str, Enum):
+    """Progress information that a presentation layer may render or ignore."""
+
+    PLAN = "plan"
+    ACTION_PENDING = "action_pending"
+    ACTION_START = "action_start"
+    ACTION_RESULT = "action_result"
+    WARNING = "warning"
+
+
+@dataclass(frozen=True, slots=True)
+class OrchestrationEvent:
+    """A concise public event; never contains private AEML thought text."""
+
+    kind: OrchestrationEventKind
+    text: str
+    action_id: str | None = None
+    tool: str | None = None
+    effect: ToolEffect | None = None
+    status: ResultStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)

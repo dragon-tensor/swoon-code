@@ -12,8 +12,11 @@ from pathlib import Path
 
 from . import __version__
 from .aeml import AEMLPromptBuilder
+from .aeml.models import ResultStatus, ToolEffect
 from .orchestration import (
     AgentOrchestrator,
+    OrchestrationEvent,
+    OrchestrationEventKind,
     OrchestrationLimits,
     RunResult,
     RunStopReason,
@@ -29,6 +32,7 @@ from .session import (
     workspace_name_for_session,
 )
 from .transport import AEMLChatChannel, ChatGPTWebTransport
+from .terminal import TerminalUI
 from .tools import AgentToolDispatcher
 
 
@@ -433,8 +437,9 @@ def _add_browser_arguments(
 
 
 def _run_chat(args: argparse.Namespace) -> int:
+    ui = TerminalUI()
     if not args.prompt and not args.interactive:
-        print("Error: chat requires --prompt or --interactive.", file=sys.stderr)
+        ui.error("Error: chat requires --prompt or --interactive.")
         return EXIT_USAGE
 
     client = None
@@ -443,44 +448,43 @@ def _run_chat(args: argparse.Namespace) -> int:
         client = _transport(args)
         client.start()
         if args.interactive:
-            print("ChatGPT — type messages, /quit to exit")
+            ui.status("ChatGPT relay ready. Type /quit to exit.")
             while True:
                 try:
-                    message = input("> ").strip()
+                    message = input(ui.prompt()).strip()
                 except (EOFError, KeyboardInterrupt):
                     break
                 if not message:
                     continue
                 if message == "/quit":
                     break
-                print()
-                print(client.send(message))
-                print()
+                ui.agent(client.send(message))
         else:
-            print(client.send(args.prompt))
+            ui.agent(client.send(args.prompt))
         return EXIT_SUCCESS
     except Exception as error:
-        _report_error(error)
+        _report_error(error, ui=ui)
         return EXIT_RUNTIME_ERROR
     finally:
-        _close_transport(client)
+        _close_transport(client, ui=ui)
 
 
 def _run_agent(args: argparse.Namespace) -> int:
+    ui = TerminalUI()
     if args.resume is not None and args.session_id is not None:
-        print("Error: --session-id cannot be combined with --resume.", file=sys.stderr)
+        ui.error("Error: --session-id cannot be combined with --resume.")
         return EXIT_USAGE
     if args.resume is not None and args.name is not None:
-        print("Error: --name cannot be combined with --resume.", file=sys.stderr)
+        ui.error("Error: --name cannot be combined with --resume.")
         return EXIT_USAGE
     if args.name is not None and args.session_dir is not None:
-        print("Error: --name uses --work-dir, not legacy --session-dir.", file=sys.stderr)
+        ui.error("Error: --name uses --work-dir, not legacy --session-dir.")
         return EXIT_USAGE
     if args.resume is not None and args.max_steps is not None:
-        print("Error: --max-steps applies only to new sessions.", file=sys.stderr)
+        ui.error("Error: --max-steps applies only to new sessions.")
         return EXIT_USAGE
     if args.prompt is not None and not args.prompt.strip():
-        print("Error: --prompt cannot be empty.", file=sys.stderr)
+        ui.error("Error: --prompt cannot be empty.")
         return EXIT_USAGE
 
     try:
@@ -496,51 +500,42 @@ def _run_agent(args: argparse.Namespace) -> int:
         if session is not None:
             dispatcher.reconcile_background(session)
     except Exception as error:
-        _report_error(error)
+        _report_error(error, ui=ui)
         return EXIT_RUNTIME_ERROR
 
     resuming = session is not None
     if resuming and args.project is not None:
-        print("Error: --project only applies when creating a named session.", file=sys.stderr)
+        ui.error("Error: --project only applies when creating a named session.")
         return EXIT_USAGE
     if not resuming and args.additional_steps is not None:
-        print("Error: --additional-steps requires an existing session.", file=sys.stderr)
+        ui.error("Error: --additional-steps requires an existing session.")
         return EXIT_USAGE
     if not resuming and (args.approve_pending or args.deny_pending):
-        print("Error: pending-action decisions require an existing session.", file=sys.stderr)
+        ui.error("Error: pending-action decisions require an existing session.")
         return EXIT_USAGE
     if resuming and args.max_steps is not None:
-        print("Error: --max-steps applies only to new sessions.", file=sys.stderr)
+        ui.error("Error: --max-steps applies only to new sessions.")
         return EXIT_USAGE
 
     if args.interactive:
-        print("Swoon Code interactive agent")
-        print("Enter a coding task at swoon>. Type /quit to pause this session.")
+        ui.status("Swoon Code interactive agent")
+        ui.status("Enter a coding task at [user@swoon-code]. Type /quit to pause.")
 
     if session is not None:
-        print(f"Session: {session.id}")
-        print(f"Output: {session.paths.host_output}")
-        terminal = _terminal_session_exit(session)
+        ui.status(f"Session: {session.id}")
+        ui.status(f"Output: {session.paths.host_output}")
+        terminal = _terminal_session_exit(session, ui)
         if terminal is not None:
             return terminal
         if args.additional_steps is not None:
             if session.state.pending_confirmation is not None:
-                print(
-                    "Error: resolve the pending action before extending steps.",
-                    file=sys.stderr,
-                )
+                ui.error("Error: resolve the pending action before extending steps.")
                 return EXIT_USAGE
             if session.state.step < session.state.max_steps:
-                print(
-                    "Error: --additional-steps requires an exhausted session.",
-                    file=sys.stderr,
-                )
+                ui.error("Error: --additional-steps requires an exhausted session.")
                 return EXIT_USAGE
             if session.state.max_steps + args.additional_steps > 10_000:
-                print(
-                    "Error: the extended step budget cannot exceed 10000.",
-                    file=sys.stderr,
-                )
+                ui.error("Error: the extended step budget cannot exceed 10000.")
                 return EXIT_USAGE
 
     initial_confirmation: bool | None = None
@@ -550,16 +545,24 @@ def _run_agent(args: argparse.Namespace) -> int:
         elif args.deny_pending:
             initial_confirmation = False
         elif args.non_interactive:
-            _report_input_required(session, "destructive-action approval or denial")
+            _report_input_required(
+                session,
+                "destructive-action approval or denial",
+                ui=ui,
+            )
             return EXIT_INPUT_REQUIRED
         else:
-            initial_confirmation, abort = _read_pending_confirmation(session)
+            initial_confirmation, abort = _read_pending_confirmation(session, ui)
             if abort:
                 manager.set_status(session, SessionStatus.ABORTED)
-                print("Session aborted by the user.", file=sys.stderr)
+                ui.error("Session aborted by the user.")
                 return EXIT_ABORTED
             if initial_confirmation is None:
-                _report_input_required(session, "destructive-action approval or denial")
+                _report_input_required(
+                    session,
+                    "destructive-action approval or denial",
+                    ui=ui,
+                )
                 return EXIT_INPUT_REQUIRED
         prompt = (
             args.prompt.strip()
@@ -572,15 +575,15 @@ def _run_agent(args: argparse.Namespace) -> int:
         )
     else:
         if args.approve_pending or args.deny_pending:
-            print("Error: the resumed session has no pending action.", file=sys.stderr)
+            ui.error("Error: the resumed session has no pending action.")
             return EXIT_USAGE
-        prompt = _initial_prompt(args)
+        prompt = _initial_prompt(args, ui)
     if prompt is None:
         return EXIT_INPUT_REQUIRED
     if prompt in _ABORT_COMMANDS:
         if session is not None:
             manager.set_status(session, SessionStatus.ABORTED)
-        print("Session aborted by the user.", file=sys.stderr)
+        ui.error("Session aborted by the user.")
         return EXIT_ABORTED
 
     client: ChatGPTWebTransport | None = None
@@ -588,7 +591,7 @@ def _run_agent(args: argparse.Namespace) -> int:
         try:
             client = _transport(args)
         except Exception as error:
-            _report_error(error)
+            _report_error(error, ui=ui)
             return EXIT_RUNTIME_ERROR
         try:
             session = manager.create(
@@ -601,24 +604,25 @@ def _run_agent(args: argparse.Namespace) -> int:
                 ),
             )
         except Exception as error:
-            _report_error(error)
+            _report_error(error, ui=ui)
             return EXIT_RUNTIME_ERROR
-        print(f"Session: {session.id}")
-        print(f"Output: {session.paths.host_output}")
+        ui.status(f"Session: {session.id}")
+        ui.status(f"Output: {session.paths.host_output}")
 
     try:
         if client is None:
             client = _transport(args)
-        print("Connecting to ChatGPT...", flush=True)
+        ui.status("Connecting to ChatGPT...")
         client.start()
-        print("Connected. The coding agent is working...", flush=True)
+        ui.success("Connected. The coding agent is working.")
         prompt_builder = AEMLPromptBuilder(dispatcher.tool_specs)
         orchestrator = AgentOrchestrator(
             manager,
             AEMLChatChannel(client, prompt_builder=prompt_builder),
             dispatcher=dispatcher,
             limits=OrchestrationLimits(args.protocol_retries),
-            message_sink=_print_agent_message,
+            message_sink=ui.agent,
+            event_sink=lambda event: _render_orchestration_event(ui, event),
             keep_alive=args.interactive,
         )
         prompt_was_blocked_by_limit = (
@@ -638,9 +642,10 @@ def _run_agent(args: argparse.Namespace) -> int:
             non_interactive=args.non_interactive,
             pending_step_prompt=prompt if prompt_was_blocked_by_limit else None,
             console=args.interactive,
+            ui=ui,
         )
     except Exception as error:
-        _report_error(error)
+        _report_error(error, ui=ui)
         exit_code = EXIT_RUNTIME_ERROR
     finally:
         try:
@@ -649,9 +654,9 @@ def _run_agent(args: argparse.Namespace) -> int:
                 reason=ProcessTerminationReason.HOST_EXIT,
             )
         except Exception as error:
-            _report_error(error)
+            _report_error(error, ui=ui)
             exit_code = EXIT_RUNTIME_ERROR
-        _close_transport(client)
+        _close_transport(client, ui=ui)
     return exit_code
 
 
@@ -662,35 +667,34 @@ def _drive_agent_outcome(
     *,
     non_interactive: bool,
     pending_step_prompt: str | None,
+    ui: TerminalUI,
     console: bool = False,
 ) -> int:
     while True:
         if outcome.reason in {RunStopReason.COMPLETED, RunStopReason.DONE}:
             if outcome.reason is RunStopReason.DONE:
-                print("Session completed.")
+                ui.success("Session completed.")
             return EXIT_SUCCESS
 
         if outcome.reason is RunStopReason.ABORTED:
-            print("Session aborted by the agent.", file=sys.stderr)
+            ui.error("Session aborted by the agent.")
             return EXIT_ABORTED
 
         if outcome.reason is RunStopReason.PROTOCOL_ERROR:
             error = outcome.error
             if error is None:
-                print("Protocol failed without a structured error.", file=sys.stderr)
+                ui.error("Protocol failed without a structured error.")
             else:
-                print(f"Protocol error [{error.code}]: {error.message}", file=sys.stderr)
+                ui.error(f"Protocol error [{error.code}]: {error.message}")
             return EXIT_PROTOCOL_ERROR
 
         if outcome.reason is RunStopReason.AWAITING_USER:
             if non_interactive:
-                _report_input_required(outcome.session, "a human answer")
+                _report_input_required(outcome.session, "a human answer", ui=ui)
                 return EXIT_INPUT_REQUIRED
-            answer = _read_nonempty(
-                "swoon> " if console else "Answer (/abort to stop)> "
-            )
+            answer = _read_nonempty(ui)
             if answer is None:
-                _report_input_required(outcome.session, "a human answer")
+                _report_input_required(outcome.session, "a human answer", ui=ui)
                 return EXIT_INPUT_REQUIRED
             if answer in _ABORT_COMMANDS:
                 orchestrator.shutdown_background(
@@ -698,10 +702,12 @@ def _drive_agent_outcome(
                     reason=ProcessTerminationReason.SESSION_END,
                 )
                 if console and answer == "/quit":
-                    print(f"Session {outcome.session.id} paused. Resume it with the same name.")
+                    ui.status(
+                        f"Session {outcome.session.id} paused. Resume it with the same name."
+                    )
                     return EXIT_SUCCESS
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
-                print("Session aborted by the user.", file=sys.stderr)
+                ui.error("Session aborted by the user.")
                 return EXIT_ABORTED
             answer_was_blocked_by_limit = (
                 outcome.session.state.step >= outcome.session.state.max_steps
@@ -720,21 +726,23 @@ def _drive_agent_outcome(
                 _report_input_required(
                     outcome.session,
                     "destructive-action approval or denial",
+                    ui=ui,
                 )
                 return EXIT_INPUT_REQUIRED
-            decision, abort = _read_pending_confirmation(outcome.session)
+            decision, abort = _read_pending_confirmation(outcome.session, ui)
             if abort:
                 orchestrator.shutdown_background(
                     outcome.session,
                     reason=ProcessTerminationReason.SESSION_END,
                 )
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
-                print("Session aborted by the user.", file=sys.stderr)
+                ui.error("Session aborted by the user.")
                 return EXIT_ABORTED
             if decision is None:
                 _report_input_required(
                     outcome.session,
                     "destructive-action approval or denial",
+                    ui=ui,
                 )
                 return EXIT_INPUT_REQUIRED
             decision_prompt = (
@@ -751,19 +759,27 @@ def _drive_agent_outcome(
 
         if outcome.reason is RunStopReason.STEP_LIMIT:
             if non_interactive:
-                _report_input_required(outcome.session, "step-budget approval")
+                _report_input_required(
+                    outcome.session,
+                    "step-budget approval",
+                    ui=ui,
+                )
                 return EXIT_INPUT_REQUIRED
-            additional_steps, abort = _read_step_extension(outcome.session)
+            additional_steps, abort = _read_step_extension(outcome.session, ui)
             if abort:
                 orchestrator.shutdown_background(
                     outcome.session,
                     reason=ProcessTerminationReason.SESSION_END,
                 )
                 manager.set_status(outcome.session, SessionStatus.ABORTED)
-                print("Session aborted by the user.", file=sys.stderr)
+                ui.error("Session aborted by the user.")
                 return EXIT_ABORTED
             if additional_steps is None:
-                _report_input_required(outcome.session, "step-budget approval")
+                _report_input_required(
+                    outcome.session,
+                    "step-budget approval",
+                    ui=ui,
+                )
                 return EXIT_INPUT_REQUIRED
             approval = pending_step_prompt or (
                 f"The human approved {additional_steps} additional steps. Continue."
@@ -779,44 +795,49 @@ def _drive_agent_outcome(
         raise RuntimeError(f"Unknown orchestration outcome {outcome.reason!r}")
 
 
-def _terminal_session_exit(session: Session) -> int | None:
+def _terminal_session_exit(session: Session, ui: TerminalUI) -> int | None:
     if session.state.status is SessionStatus.COMPLETED:
-        print("Session is already completed.")
+        ui.success("Session is already completed.")
         return EXIT_SUCCESS
     if session.state.status is SessionStatus.ABORTED:
-        print("Session is already aborted.", file=sys.stderr)
+        ui.error("Session is already aborted.")
         return EXIT_ABORTED
     return None
 
 
-def _initial_prompt(args: argparse.Namespace) -> str | None:
+def _initial_prompt(args: argparse.Namespace, ui: TerminalUI) -> str | None:
     if args.prompt is not None:
         return args.prompt.strip()
     if args.non_interactive:
-        print("Input required: agent needs --prompt in non-interactive mode.", file=sys.stderr)
+        ui.error("Input required: agent needs --prompt in non-interactive mode.")
         return None
-    return _read_nonempty("swoon> " if args.interactive else "Task> ")
+    return _read_nonempty(ui)
 
 
-def _read_nonempty(prompt: str) -> str | None:
+def _read_nonempty(ui: TerminalUI) -> str | None:
     while True:
         try:
-            value = input(prompt).strip()
+            value = input(ui.prompt()).strip()
         except EOFError:
             return None
         if value:
             return value
-        print("Input cannot be empty.", file=sys.stderr)
+        ui.warning("Input cannot be empty.")
 
 
-def _read_step_extension(session: Session) -> tuple[int | None, bool]:
+def _read_step_extension(
+    session: Session,
+    ui: TerminalUI,
+) -> tuple[int | None, bool]:
     maximum = 10_000 - session.state.max_steps
     if maximum < 1:
-        print("The session is already at the hard 10000-step maximum.", file=sys.stderr)
+        ui.warning("The session is already at the hard 10000-step maximum.")
         return None, False
     while True:
         try:
-            raw = input(f"Additional steps (1-{maximum}, /abort to stop)> ").strip()
+            raw = input(
+                ui.prompt(f"Additional steps (1-{maximum}, /abort to stop)>")
+            ).strip()
         except EOFError:
             return None, False
         if raw in _ABORT_COMMANDS:
@@ -827,19 +848,25 @@ def _read_step_extension(session: Session) -> tuple[int | None, bool]:
             value = 0
         if 1 <= value <= maximum:
             return value, False
-        print(f"Enter a whole number from 1 to {maximum}, or /abort.", file=sys.stderr)
+        ui.warning(f"Enter a whole number from 1 to {maximum}, or /abort.")
 
 
-def _read_pending_confirmation(session: Session) -> tuple[bool | None, bool]:
+def _read_pending_confirmation(
+    session: Session,
+    ui: TerminalUI,
+) -> tuple[bool | None, bool]:
     pending = session.state.pending_confirmation
     if pending is None:
         raise RuntimeError("Session has no pending confirmation")
-    print(
-        f"Pending {pending.action.tool} action {pending.action.id!r}: {pending.reason}"
+    ui.process(
+        f"Pending {pending.action.tool} action {pending.action.id!r}: {pending.reason}",
+        powerful=True,
     )
     while True:
         try:
-            raw = input("Approve this exact action? [y/N] (/abort to stop)> ").strip().lower()
+            raw = input(
+                ui.prompt("Approve this exact action? [y/N] (/abort to stop)>")
+            ).strip().lower()
         except EOFError:
             return None, False
         if raw in _ABORT_COMMANDS:
@@ -848,7 +875,7 @@ def _read_pending_confirmation(session: Session) -> tuple[bool | None, bool]:
             return True, False
         if raw in {"", "n", "no"}:
             return False, False
-        print("Enter y, n, or /abort.", file=sys.stderr)
+        ui.warning("Enter y, n, or /abort.")
 
 
 def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:
@@ -864,20 +891,47 @@ def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:
     )
 
 
-def _close_transport(client: ChatGPTWebTransport | None) -> None:
+def _close_transport(
+    client: ChatGPTWebTransport | None,
+    *,
+    ui: TerminalUI | None = None,
+) -> None:
     if client is None:
         return
     try:
         client.close()
     except Exception as error:
-        print(
-            f"Warning: browser cleanup failed ({error.__class__.__name__}).",
-            file=sys.stderr,
+        selected_ui = ui or TerminalUI()
+        selected_ui.warning(
+            f"Browser cleanup failed ({error.__class__.__name__}).",
+            stderr=True,
         )
 
 
 def _print_agent_message(message: str) -> None:
-    print(message, flush=True)
+    TerminalUI().agent(message)
+
+
+def _render_orchestration_event(ui: TerminalUI, event: OrchestrationEvent) -> None:
+    if event.kind is OrchestrationEventKind.PLAN:
+        ui.plan(event.text)
+        return
+    if event.kind is OrchestrationEventKind.WARNING:
+        ui.warning(event.text)
+        return
+    if event.kind in {
+        OrchestrationEventKind.ACTION_PENDING,
+        OrchestrationEventKind.ACTION_START,
+    }:
+        powerful = event.effect in {ToolEffect.MUTATING, ToolEffect.EXECUTING}
+        ui.process(event.text, powerful=powerful)
+        return
+    if event.kind is OrchestrationEventKind.ACTION_RESULT:
+        tool = event.tool or "tool"
+        detail = tool if not event.text else f"{tool} — {event.text}"
+        ui.result(detail, event.status or ResultStatus.FAILURE)
+        return
+    raise ValueError(f"Unknown orchestration event kind {event.kind!r}")
 
 
 def _browser_runtime_status(*, launch: bool = False) -> tuple[bool, str]:
@@ -946,16 +1000,23 @@ def _print_diagnostic(
     print(f"[{status}] {label}: {detail}")
 
 
-def _report_input_required(session: Session, requirement: str) -> None:
-    print(
+def _report_input_required(
+    session: Session,
+    requirement: str,
+    *,
+    ui: TerminalUI | None = None,
+) -> None:
+    selected_ui = ui or TerminalUI()
+    selected_ui.warning(
         f"Input required: session {session.id} is waiting for {requirement}.",
-        file=sys.stderr,
+        stderr=True,
     )
 
 
-def _report_error(error: Exception) -> None:
+def _report_error(error: Exception, *, ui: TerminalUI | None = None) -> None:
     code = getattr(error, "code", error.__class__.__name__)
-    print(f"Error [{code}]: {error}", file=sys.stderr)
+    selected_ui = ui or TerminalUI()
+    selected_ui.error(f"Error [{code}]: {error}")
 
 
 def _normalize_legacy_args(argv: Sequence[str]) -> list[str]:

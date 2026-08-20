@@ -189,15 +189,26 @@ swoon my-project
 ```
 
 ```text
-Swoon Code interactive agent
-Enter a coding task at swoon>. Type /quit to end this session.
-swoon> Inspect the project and explain the architecture.
+-->> Swoon Code interactive agent
+-->> Enter a coding task at [user@swoon-code]. Type /quit to pause.
+[user@swoon-code] Inspect the project and explain the architecture.
+-->> [plan] Inspect the input, map its architecture, then report.
+>> list-dir — input
+>> [success] list-dir — 8 entries
+[swoon-code] The project is organized around...
 ```
 
-After a task completes, Swoon returns to `swoon>` for your next instruction. The terminal still
-asks separately before destructive changes and when the step budget needs extension. `/quit`
-pauses the session for later resumption; `/abort` permanently aborts it. Output stays in the named
-folder throughout.
+The live terminal uses contrast and a small fixed vocabulary: direct agent messages are brightest,
+`-->>` is dim plan or passive status, and `>>` is tool activity. Successful results are green,
+warnings are yellow, and failures plus impactful mutations or commands are red. Terminals without
+ANSI support receive the same prefixes as plain text; set `NO_COLOR=1` to disable color explicitly.
+The AEML `<thought>` field remains private and is never printed; the explicit `<plan>` and every
+tool lifecycle event provide visible progress without exposing hidden scratch reasoning.
+
+After a task completes, Swoon returns to `[user@swoon-code]` for your next instruction. The
+terminal still asks separately before destructive changes and when the step budget needs extension.
+`/quit` pauses the session for later resumption; `/abort` permanently aborts it. Output stays in the
+named folder throughout.
 
 For scripted use, `--non-interactive` returns exit code 6 when human input is required. An
 exhausted session can be resumed with explicit approval:

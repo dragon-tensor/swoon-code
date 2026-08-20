@@ -177,6 +177,30 @@ directory:
   --prompt "Continue the inspection."
 ```
 
+### Interactive terminal coding agent
+
+Use `--interactive` when you want an ongoing terminal conversation with the coding agent, rather
+than one autonomous task invocation. The same private session, browser conversation, tool history,
+and output directory remain active between your instructions:
+
+```bash
+.venv/bin/swoon agent \
+  --interactive \
+  --headed \
+  --cookies cookies.json \
+  --project /path/to/project
+```
+
+```text
+Swoon Code interactive agent
+Enter a coding task at swoon>. Type /quit to end this session.
+swoon> Inspect the project and explain the architecture.
+```
+
+After a task completes, Swoon returns to `swoon>` for your next instruction. The terminal still
+asks separately before destructive changes and when the step budget needs extension. `/quit` or
+`/abort` ends the active session safely; its output remains available for export.
+
 For scripted use, `--non-interactive` returns exit code 6 when human input is required. An
 exhausted session can be resumed with explicit approval:
 

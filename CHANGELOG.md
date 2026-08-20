@@ -16,6 +16,8 @@ tagged; the `0.x` series remains experimental and may introduce breaking changes
   unchanged-response window; timeouts now reject partial AEML instead of triggering repair spam.
 - Insert multiline AEML into the ChatGPT composer atomically so newline characters cannot submit
   incomplete prompts as separate messages.
+- Add a persistent `swoon agent --interactive` terminal console for successive coding tasks in one
+  session.
 - Added a strict, resource-limited AEML parser, validator, prompt boundary, and resumable agent
   orchestration loop.
 - Added isolated input/output sessions, guarded filesystem and dependency mutations, offline

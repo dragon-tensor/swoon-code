@@ -147,7 +147,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="repairs after an invalid AEML response (default: 2)",
     )
-    agent.add_argument(
+    interaction = agent.add_mutually_exclusive_group()
+    interaction.add_argument(
+        "--interactive",
+        action="store_true",
+        help="keep one coding session open at a swoon> terminal prompt",
+    )
+    interaction.add_argument(
         "--non-interactive",
         action="store_true",
         help="return exit 6 instead of reading human input",
@@ -417,6 +423,10 @@ def _run_agent(args: argparse.Namespace) -> int:
         _report_error(error)
         return EXIT_RUNTIME_ERROR
 
+    if args.interactive:
+        print("Swoon Code interactive agent")
+        print("Enter a coding task at swoon>. Type /quit to end this session.")
+
     if session is not None:
         print(f"Session: {session.id}")
         print(f"Output: {session.paths.host_output}")
@@ -513,6 +523,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             dispatcher=dispatcher,
             limits=OrchestrationLimits(args.protocol_retries),
             message_sink=_print_agent_message,
+            keep_alive=args.interactive,
         )
         prompt_was_blocked_by_limit = (
             args.additional_steps is None
@@ -530,6 +541,7 @@ def _run_agent(args: argparse.Namespace) -> int:
             outcome,
             non_interactive=args.non_interactive,
             pending_step_prompt=prompt if prompt_was_blocked_by_limit else None,
+            console=args.interactive,
         )
     except Exception as error:
         _report_error(error)
@@ -554,6 +566,7 @@ def _drive_agent_outcome(
     *,
     non_interactive: bool,
     pending_step_prompt: str | None,
+    console: bool = False,
 ) -> int:
     while True:
         if outcome.reason in {RunStopReason.COMPLETED, RunStopReason.DONE}:
@@ -577,7 +590,9 @@ def _drive_agent_outcome(
             if non_interactive:
                 _report_input_required(outcome.session, "a human answer")
                 return EXIT_INPUT_REQUIRED
-            answer = _read_nonempty("Answer (/abort to stop)> ")
+            answer = _read_nonempty(
+                "swoon> " if console else "Answer (/abort to stop)> "
+            )
             if answer is None:
                 _report_input_required(outcome.session, "a human answer")
                 return EXIT_INPUT_REQUIRED
@@ -681,7 +696,7 @@ def _initial_prompt(args: argparse.Namespace) -> str | None:
     if args.non_interactive:
         print("Input required: agent needs --prompt in non-interactive mode.", file=sys.stderr)
         return None
-    return _read_nonempty("Task> ")
+    return _read_nonempty("swoon> " if args.interactive else "Task> ")
 
 
 def _read_nonempty(prompt: str) -> str | None:

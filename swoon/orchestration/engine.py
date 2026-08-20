@@ -60,6 +60,7 @@ class AEMLOrchestrator:
         context_builder: AEMLContextBuilder | None = None,
         limits: OrchestrationLimits | None = None,
         message_sink: Callable[[str], None] | None = None,
+        keep_alive: bool = False,
     ) -> None:
         if not isinstance(session_manager, SessionManager):
             raise TypeError("session_manager must be a SessionManager")
@@ -78,6 +79,8 @@ class AEMLOrchestrator:
             raise TypeError("limits must be OrchestrationLimits or null")
         if message_sink is not None and not callable(message_sink):
             raise TypeError("message_sink must be callable or null")
+        if type(keep_alive) is not bool:
+            raise TypeError("keep_alive must be boolean")
 
         tool_specs = channel.prompt_builder.tool_specs
         unsupported = set(tool_specs) - selected_dispatcher.implemented_tools
@@ -96,6 +99,7 @@ class AEMLOrchestrator:
         self.context_builder = selected_context_builder
         self.limits = selected_limits
         self.message_sink = message_sink
+        self.keep_alive = keep_alive
         self._run_lock = Lock()
 
     def run(
@@ -261,6 +265,18 @@ class AEMLOrchestrator:
                 updates.append(source.say)
 
             if source.complete is not None:
+                if self.keep_alive:
+                    question = "Task complete. Enter the next instruction or /quit."
+                    self.session_manager.set_status(session, SessionStatus.WAITING_USER)
+                    self._publish_updates(source.say, source.complete, question)
+                    return RunResult(
+                        session=session,
+                        reason=RunStopReason.AWAITING_USER,
+                        updates=tuple(updates),
+                        question=question,
+                        summary=source.complete,
+                        last_turn=self.channel.last_turn,
+                    )
                 self._set_terminal_status(session, SessionStatus.COMPLETED)
                 self._publish_updates(source.say, source.complete)
                 return RunResult(
@@ -283,6 +299,17 @@ class AEMLOrchestrator:
                 )
 
             if source.next is NextDirective.DONE:
+                if self.keep_alive:
+                    question = "Turn complete. Enter the next instruction or /quit."
+                    self.session_manager.set_status(session, SessionStatus.WAITING_USER)
+                    self._publish_updates(source.say, question)
+                    return RunResult(
+                        session=session,
+                        reason=RunStopReason.AWAITING_USER,
+                        updates=tuple(updates),
+                        question=question,
+                        last_turn=self.channel.last_turn,
+                    )
                 self._set_terminal_status(session, SessionStatus.COMPLETED)
                 self._publish_updates(source.say)
                 return RunResult(
@@ -592,6 +619,7 @@ class AgentOrchestrator(AEMLOrchestrator):
         context_builder: AEMLContextBuilder | None = None,
         limits: OrchestrationLimits | None = None,
         message_sink: Callable[[str], None] | None = None,
+        keep_alive: bool = False,
     ) -> None:
         selected = dispatcher or AgentToolDispatcher(session_manager)
         if not isinstance(selected, AgentToolDispatcher):
@@ -603,6 +631,7 @@ class AgentOrchestrator(AEMLOrchestrator):
             context_builder=context_builder,
             limits=limits,
             message_sink=message_sink,
+            keep_alive=keep_alive,
         )
 
     def shutdown_background(

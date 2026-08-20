@@ -367,6 +367,43 @@ class CLITests(unittest.TestCase):
         self.assertIn("<user_prompt>Blue</user_prompt>", browser.prompts[1])
         self.assertEqual(stderr, "")
 
+    def test_interactive_agent_console_accepts_follow_up_tasks(self) -> None:
+        session_id = "sess_cli_console"
+        browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    "<complete>Initial task complete.</complete></aeml>"
+                ),
+                (
+                    f'<aeml turn="2" session="{session_id}">'
+                    "<complete>Follow-up complete.</complete></aeml>"
+                ),
+            ]
+        )
+
+        code, stdout, stderr = self.invoke(
+            self.agent_args(
+                "--interactive",
+                "--session-id",
+                session_id,
+                "--max-steps",
+                "3",
+            ),
+            browser,
+            inputs=["Inspect the project", "Add type hints", "/quit"],
+        )
+
+        session = SessionManager(self.sessions).load(session_id)
+        self.assertEqual(code, EXIT_ABORTED)
+        self.assertEqual(session.state.status, SessionStatus.ABORTED)
+        self.assertEqual(session.state.step, 2)
+        self.assertIn("Swoon Code interactive agent", stdout)
+        self.assertIn("Initial task complete.", stdout)
+        self.assertIn("Follow-up complete.", stdout)
+        self.assertIn("<user_prompt>Add type hints</user_prompt>", browser.prompts[1])
+        self.assertIn("aborted by the user", stderr)
+
     def test_noninteractive_exit_stops_live_background_process(self) -> None:
         if not self.background_runtime_available():
             self.skipTest("Bubblewrap background-command runtime is unavailable")

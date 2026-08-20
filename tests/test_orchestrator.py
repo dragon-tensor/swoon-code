@@ -407,13 +407,23 @@ class AgentOrchestratorTests(unittest.TestCase):
         ReadOnlyOrchestratorTests._make_writable(self.root)
         self.temporary.cleanup()
 
-    def agent(self, transport: FakeTextTransport) -> AgentOrchestrator:
+    def agent(
+        self,
+        transport: FakeTextTransport,
+        *,
+        keep_alive: bool = False,
+    ) -> AgentOrchestrator:
         dispatcher = AgentToolDispatcher(self.manager)
         channel = AEMLChatChannel(
             transport,
             prompt_builder=AEMLPromptBuilder(dispatcher.tool_specs),
         )
-        return AgentOrchestrator(self.manager, channel, dispatcher=dispatcher)
+        return AgentOrchestrator(
+            self.manager,
+            channel,
+            dispatcher=dispatcher,
+            keep_alive=keep_alive,
+        )
 
     def test_agent_executes_output_create_then_completes(self) -> None:
         session = self.manager.create(session_id="sess_agent_create")
@@ -441,6 +451,44 @@ class AgentOrchestratorTests(unittest.TestCase):
         )
         self.assertIn('name="create-file"', transport.prompts[0])
         self.assertIn('<result id="create1">', transport.prompts[1])
+
+    def test_interactive_agent_keeps_a_completed_session_open(self) -> None:
+        session = self.manager.create(max_steps=3, session_id="sess_agent_console")
+        transport = FakeTextTransport(
+            [
+                (
+                    '<aeml turn="1" session="sess_agent_console">'
+                    "<complete>Initial task complete.</complete></aeml>"
+                ),
+                (
+                    '<aeml turn="2" session="sess_agent_console">'
+                    "<complete>Follow-up complete.</complete></aeml>"
+                ),
+            ]
+        )
+        messages: list[str] = []
+        orchestrator = self.agent(transport, keep_alive=True)
+        orchestrator.message_sink = messages.append
+
+        first = orchestrator.run(session, "Inspect the project")
+        second = orchestrator.run(first.session, "Add type hints")
+
+        self.assertEqual(first.reason, RunStopReason.AWAITING_USER)
+        self.assertEqual(first.summary, "Initial task complete.")
+        self.assertEqual(second.reason, RunStopReason.AWAITING_USER)
+        self.assertEqual(second.summary, "Follow-up complete.")
+        self.assertEqual(second.session.state.status, SessionStatus.WAITING_USER)
+        self.assertEqual(second.session.state.step, 2)
+        self.assertIn("<user_prompt>Add type hints</user_prompt>", transport.prompts[1])
+        self.assertEqual(
+            messages,
+            [
+                "Initial task complete.",
+                "Task complete. Enter the next instruction or /quit.",
+                "Follow-up complete.",
+                "Task complete. Enter the next instruction or /quit.",
+            ],
+        )
 
     def test_overwrite_confirmation_survives_new_orchestrator_and_channel(self) -> None:
         session = self.manager.create(session_id="sess_agent_confirm")

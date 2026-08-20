@@ -171,6 +171,7 @@ class ArgumentSpec:
     maximum: int | None = None
     allowed_roots: frozenset[Root] = field(default_factory=frozenset)
     write_target: bool = False
+    allow_base64: bool = False
 
 
 @dataclass(frozen=True, slots=True)

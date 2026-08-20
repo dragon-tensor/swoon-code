@@ -1,5 +1,5 @@
 # AEML — Agent Execution Markup Language
-### Protocol spec v0.4 — for swoon code
+### Protocol spec v0.5 — for swoon code
 
 This is the contract between a hosted chatbot (no machine access, turn-based, message-size
 limited) and a local interpreter (full machine access, no reasoning) that lets the two together
@@ -46,6 +46,10 @@ understanding the other's intent.
 
 ## 1. Message envelope
 
+The hosted-browser transport frames the envelope inside exactly one `xml` Markdown code block and
+extracts the code node's exact text. The XML parser also accepts a bare envelope for local API and
+backward compatibility, but rejects fences with surrounding prose or multiple blocks.
+
 ```
 <aeml turn="7" session="sess_a1b2c3">
   ...tags from §2...
@@ -70,7 +74,7 @@ understanding the other's intent.
 | `<action id="...">` | Wraps one tool invocation | `id` unique per session | see below |
 | &nbsp;&nbsp;`<tool>` | Which tool | — | name, must match §5 |
 | &nbsp;&nbsp;`<path root="output\|input">` | Path arg, relative to the given root | `root` optional, defaults to `output` | e.g. `app.py` |
-| &nbsp;&nbsp;`<args>` | Extra key-value args, tool-specific | — | `<key>value</key>` pairs (see §5 for per-tool schema) |
+| &nbsp;&nbsp;`<args>` | Extra key-value args, tool-specific | optional `encoding="base64"` only where the generated schema permits it | `<key>value</key>` pairs (see §5 for per-tool schema) |
 | &nbsp;&nbsp;`<chunk seq="N" final="true\|false">` | Marks this action as one piece of a multi-turn write (§7) | `seq`, `final` | — |
 | &nbsp;&nbsp;`<expect_confirm>` | Marks action destructive; interpreter pauses for human approval | — | `true`/`false` |
 | `<say>` | Message to the human, no tool call | — | free text |
@@ -88,6 +92,14 @@ characters such as `<` and `&` cannot corrupt the envelope:
 ```
 <args><content><![CDATA[if value < 10:
     print("safe payload")]]></content></args>
+```
+
+For `content`, `old_str`, and `new_str`, exact UTF-8 bytes may instead use strict unwrapped RFC 4648
+Base64. The parser decodes only schemas marked `encodings="plain,base64"`, rejects invalid Base64 or
+non-UTF-8 bytes, and applies a decoded-size bound before tool dispatch:
+
+```xml
+<args><content encoding="base64">ZGVmIGYoKToKICAgIHJldHVybiAxCg==</content></args>
 ```
 
 ---

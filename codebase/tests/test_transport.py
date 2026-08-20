@@ -22,6 +22,25 @@ class FakeMessage:
         return self.text
 
 
+class FakeCodeElement:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def text_content(self) -> str:
+        return self.text
+
+
+class FakeCodeMessage(FakeMessage):
+    def __init__(self, rendered_text: str, code_texts: list[str]) -> None:
+        super().__init__(rendered_text)
+        self.code_texts = code_texts
+
+    def query_selector_all(self, selector: str):
+        if selector == "pre code":
+            return [FakeCodeElement(text) for text in self.code_texts]
+        return []
+
+
 class FakeVisibleElement:
     def is_visible(self) -> bool:
         return True
@@ -204,6 +223,7 @@ class ChatGPTWebTransportTests(unittest.TestCase):
         transport.page = page
         transport.verbose = False
         transport.response_settle_time = 1.0
+        transport.response_timeout_retries = 0
         return transport
 
     def test_compatibility_alias_is_preserved(self) -> None:
@@ -241,7 +261,31 @@ class ChatGPTWebTransportTests(unittest.TestCase):
         self.assertEqual(page.prompt.values, [multiline])
         self.assertEqual(page.send_button.clicks, 1)
         self.assertEqual(page.keyboard.events, [])
-        wait.assert_called_once_with(previous_count=0, previous_text="", timeout=180)
+        wait.assert_called_once_with(
+            previous_count=0,
+            previous_text="",
+            timeout=180,
+            timeout_retries=0,
+        )
+
+    def test_message_text_prefers_one_lossless_aeml_code_block(self) -> None:
+        transport = self.make_transport(FakePage([]))
+        exact = (
+            '<aeml turn="1" session="sess_x">\n'
+            '  <action id="a"><args><content>def f():\n    return 1\n'
+            '</content></args></action>\n</aeml>'
+        )
+        message = FakeCodeMessage("flattened rendered text", [exact])
+
+        self.assertEqual(transport._message_text(message), exact)
+
+    def test_message_text_ignores_ambiguous_or_non_aeml_code_blocks(self) -> None:
+        transport = self.make_transport(FakePage([]))
+        multiple = FakeCodeMessage("rendered", ["<aeml/>", "second"])
+        unrelated = FakeCodeMessage("rendered", ["print('hello')"])
+
+        self.assertEqual(transport._message_text(multiple), "rendered")
+        self.assertEqual(transport._message_text(unrelated), "rendered")
 
     def test_wait_returns_a_stable_new_response(self) -> None:
         page = FakePage([FakeMessage("old"), FakeMessage("new")])
@@ -276,6 +320,38 @@ class ChatGPTWebTransportTests(unittest.TestCase):
                     previous_text="old",
                     timeout=0.25,
                 )
+
+    def test_wait_can_extend_without_resubmitting_the_prompt(self) -> None:
+        page = FakePage([FakeMessage("old")])
+        transport = self.make_transport(page)
+        transport.response_settle_time = 0.05
+
+        def messages(_selector: str):
+            current = [FakeMessage("old")]
+            if clock[0] >= 0.3:
+                current.append(FakeMessage("complete"))
+            return current
+
+        clock = [0.0]
+
+        def monotonic() -> float:
+            value = clock[0]
+            clock[0] += 0.1
+            return value
+
+        page.query_selector_all = messages
+        with (
+            patch("swoon.transport.chatgpt_web.time.monotonic", side_effect=monotonic),
+            patch("swoon.transport.chatgpt_web.time.sleep"),
+        ):
+            result = transport._wait_for_new_response(
+                previous_count=1,
+                previous_text="old",
+                timeout=0.15,
+                timeout_retries=2,
+            )
+
+        self.assertEqual(result, "complete")
 
     def test_wait_requires_generation_control_to_disappear(self) -> None:
         page = FakePage([FakeMessage("old"), FakeMessage("complete")])

@@ -190,7 +190,7 @@ swoon my-project
 
 ```text
 -->> Swoon Code interactive agent
--->> Enter a coding task at [user@swoon-code]. Type /quit to pause.
+-->> Enter a coding task at [user@swoon-code]. Type /paste for multiline input or /quit to pause.
 [user@swoon-code] Inspect the project and explain the architecture.
 -->> [plan] Inspect the input, map its architecture, then report.
 >> list-dir — input
@@ -207,8 +207,9 @@ tool lifecycle event provide visible progress without exposing hidden scratch re
 
 After a task completes, Swoon returns to `[user@swoon-code]` for your next instruction. The
 terminal still asks separately before destructive changes and when the step budget needs extension.
-`/quit` pauses the session for later resumption; `/abort` permanently aborts it. Output stays in the
-named folder throughout.
+Normal terminal bracketed paste is accepted as one multiline task. If a terminal does not preserve
+it, enter `/paste`, paste or type the complete task, then put `/end` on its own line. `/quit` pauses
+the session for later resumption; `/abort` permanently aborts it. Output stays in the named folder.
 
 For scripted use, `--non-interactive` returns exit code 6 when human input is required. An
 exhausted session can be resumed with explicit approval:
@@ -268,10 +269,13 @@ The legacy `chatgpt_agent.py` entrypoint remains compatible. The browser impleme
 
 Swoon does not treat the first visible text as a completed reply. It waits until ChatGPT is no
 longer showing a generation control and the assistant message has remained unchanged for five
-seconds. `--timeout` is the maximum wait for the whole response; `--response-settle-time` adjusts
-the unchanged-text window. If the maximum expires, Swoon stops the exchange and never submits a
-repair prompt based on a partial response. Multiline AEML is inserted into the composer as one
-atomic value and submitted once; embedded newlines are never emitted as Enter key events.
+seconds. `--timeout` sets one response-wait window and `--response-timeout-retries` controls how
+many additional windows are allowed (default: 2); extensions keep waiting for the same response
+and never resubmit the prompt. `--response-settle-time` adjusts the unchanged-text window. If all
+windows expire, Swoon stops the exchange and never submits a repair prompt based on a partial
+response. Multiline AEML is inserted into the composer as one atomic value and submitted once;
+embedded newlines are never emitted as Enter key events. Assistant AEML is read from the exact DOM
+text of its single XML code block so browser layout cannot flatten source indentation.
 
 ## Session results and cleanup
 

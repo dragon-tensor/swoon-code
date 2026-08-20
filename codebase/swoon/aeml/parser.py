@@ -11,6 +11,10 @@ from .models import AEMLMessage, Action, Argument, Chunk, NextDirective, PathRef
 
 _CDATA = re.compile(r"<!\[CDATA\[.*?\]\]>", re.DOTALL)
 _FORBIDDEN_XML = re.compile(r"<!DOCTYPE|<!ENTITY|<!--|<\?", re.IGNORECASE)
+_XML_FENCE = re.compile(
+    r"\A```(?:xml)?[ \t]*\r?\n(?P<body>.*?)\r?\n```[ \t]*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 class AEMLParser:
@@ -48,6 +52,9 @@ class AEMLParser:
         source = response.strip()
         if not source:
             raise AEMLParseError("AEML response is empty")
+        fence = _XML_FENCE.fullmatch(source)
+        if fence is not None:
+            source = fence.group("body").strip()
         if source.startswith("<aeml") and "</aeml>" not in source:
             raise AEMLTruncatedError()
 
@@ -179,7 +186,7 @@ class AEMLParser:
                         value=self._text_element(
                             argument,
                             strip=False,
-                            allowed_attributes={"root"},
+                            allowed_attributes={"root", "encoding"},
                         ),
                         attributes=tuple(sorted(argument.attrib.items())),
                     )

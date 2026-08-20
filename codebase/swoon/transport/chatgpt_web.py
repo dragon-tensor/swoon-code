@@ -93,6 +93,7 @@ class ChatGPTWebTransport:
         *,
         headless: bool = True,
         response_timeout: float = 180,
+        response_timeout_retries: int = 0,
         response_settle_time: float = DEFAULT_RESPONSE_SETTLE_SECONDS,
         storage_state_path: str | Path | None = None,
         debug_directory: str | Path | None = None,
@@ -106,7 +107,10 @@ class ChatGPTWebTransport:
             raise ValueError("Response settle time must be positive")
         if response_settle_time >= response_timeout:
             raise ValueError("Response settle time must be shorter than the response timeout")
+        if type(response_timeout_retries) is not int or not 0 <= response_timeout_retries <= 10:
+            raise ValueError("Response timeout retries must be an integer from 0 to 10")
         self.response_timeout = response_timeout
+        self.response_timeout_retries = response_timeout_retries
         self.response_settle_time = response_settle_time
         self.storage_state_path = (
             Path(storage_state_path).expanduser() if storage_state_path is not None else None
@@ -469,7 +473,7 @@ class ChatGPTWebTransport:
         self._dismiss_modals()
         old_messages = self.page.query_selector_all(MESSAGE_SELECTOR)
         previous_count = len(old_messages)
-        previous_text = old_messages[-1].inner_text() if old_messages else ""
+        previous_text = self._message_text(old_messages[-1]) if old_messages else ""
 
         prompt = self._visible_composer()
         if prompt is None:
@@ -496,7 +500,25 @@ class ChatGPTWebTransport:
             previous_count=previous_count,
             previous_text=previous_text,
             timeout=self.response_timeout,
+            timeout_retries=getattr(self, "response_timeout_retries", 0),
         )
+
+    @staticmethod
+    def _message_text(message: Any) -> str:
+        """Prefer exact code-node text over layout-normalized rendered text."""
+
+        try:
+            code_blocks = message.query_selector_all("pre code")
+        except Exception:
+            code_blocks = []
+        if len(code_blocks) == 1:
+            try:
+                exact = code_blocks[0].text_content()
+            except Exception:
+                exact = None
+            if isinstance(exact, str) and exact.strip().startswith("<aeml"):
+                return exact.strip()
+        return message.inner_text()
 
     def _generation_is_active(self) -> bool:
         if self.page is None:
@@ -531,17 +553,29 @@ class ChatGPTWebTransport:
         previous_count: int,
         previous_text: str,
         timeout: float,
+        timeout_retries: int = 0,
     ) -> str:
         last = ""
         last_change_at: float | None = None
         deadline = time.monotonic() + timeout
 
-        while (now := time.monotonic()) < deadline:
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                if timeout_retries <= 0:
+                    break
+                timeout_retries -= 1
+                self.log(
+                    "Assistant is still responding; extending the wait without sending "
+                    f"another prompt ({timeout_retries} extension(s) remain)"
+                )
+                deadline = now + timeout
+                continue
             self._dismiss_modals()
             generation_active = self._generation_is_active()
             messages = self.page.query_selector_all(MESSAGE_SELECTOR)
             if messages:
-                current = messages[-1].inner_text()
+                current = self._message_text(messages[-1])
                 is_new_response = len(messages) > previous_count or current != previous_text
                 if is_new_response and current:
                     if current != last:

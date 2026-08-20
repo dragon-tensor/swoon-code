@@ -51,7 +51,9 @@ Each invocation applies all of these boundaries:
 - no inherited stdin, credentials, proxy variables, user home, package caches, or Git config;
 - a new process session plus PID namespace cleanup on timeout/output-limit termination;
 - wall-clock, CPU, address-space, file-size, process-count, open-file, output, snapshot, and tmpfs
-  limits.
+  limits. The outer Linux process limit includes the real user's existing task baseline so a busy
+  browser session cannot prevent Bubblewrap from starting; a trusted PID-namespace supervisor
+  independently enforces the configured command-task ceiling.
 
 The default limits are:
 

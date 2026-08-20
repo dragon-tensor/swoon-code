@@ -7,6 +7,14 @@ tagged; the `0.x` series remains experimental and may introduce breaking changes
 
 ### Release candidate: 0.1.0
 
+- Preserve source indentation end to end by requesting one XML code block, reading its exact DOM
+  text, and supporting bounded strict Base64 for file-content/edit arguments.
+- Accept terminal bracketed paste as one coding task and add explicit `/paste` ... `/end` mode for
+  terminals without reliable multiline paste support.
+- Make long ChatGPT responses recoverable with configurable wait-window extensions that never
+  resubmit the prompt.
+- Fix Bubblewrap startup on busy Linux desktops by accounting for the real-UID task baseline while
+  independently enforcing the 256-task ceiling inside the private PID namespace.
 - Reject incomplete authentication-page-only and encrypted Hotcleaner cookie exports before
   browser startup, detect ChatGPT guest mode explicitly, and recognize current textarea-style
   message composers.

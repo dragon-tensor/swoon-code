@@ -2,18 +2,23 @@
 
 This module is executed inside Bubblewrap. It is intentionally standalone: it
 copies the interpreter-filtered output seed into the size-limited tmpfs and
-then replaces itself with the requested argv without invoking a shell.
+then supervises the requested argv without invoking a shell. The supervisor is
+PID 1 in the private namespace and enforces a task count independent of the
+host user's existing desktop and browser processes.
 """
 
 from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 _READY_MARKER = b"\x1eSWOON_SANDBOX_READY\x1e\n"
+_PROCESS_POLL_SECONDS = 0.02
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
@@ -55,14 +60,87 @@ def _copy_tree(source: Path, destination: Path) -> None:
             os.close(source_fd)
 
 
+def _task_count(proc_root: Path = Path("/proc")) -> int:
+    total = 0
+    try:
+        entries = proc_root.iterdir()
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.name.isdecimal():
+            continue
+        try:
+            status = (entry / "status").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        threads = 1
+        for line in status.splitlines():
+            if not line.startswith("Threads:"):
+                continue
+            fields = line.split()
+            if len(fields) == 2:
+                try:
+                    threads = max(1, int(fields[1]))
+                except ValueError:
+                    pass
+            break
+        total += threads
+    return total
+
+
+def _command_task_count() -> int:
+    try:
+        own_threads = len(tuple((Path("/proc") / str(os.getpid()) / "task").iterdir()))
+    except OSError:
+        own_threads = 1
+    return max(0, _task_count() - own_threads)
+
+
+def _supervise(command: list[str], max_processes: int) -> int:
+    try:
+        process = subprocess.Popen(command, env=os.environ)
+    except FileNotFoundError:
+        print(f"swoon command not found: {command[0]!r}", file=sys.stderr)
+        return 127
+    except OSError as error:
+        print(
+            f"swoon command could not start ({error.__class__.__name__})",
+            file=sys.stderr,
+        )
+        return 126
+
+    while (returncode := process.poll()) is None:
+        if _command_task_count() > max_processes:
+            print(
+                f"swoon command exceeded the {max_processes}-task sandbox limit",
+                file=sys.stderr,
+            )
+            try:
+                process.kill()
+                process.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            return 125
+        time.sleep(_PROCESS_POLL_SECONDS)
+    return returncode if returncode >= 0 else 128 + abs(returncode)
+
+
 def main(argv: list[str] | None = None) -> int:
     values = list(sys.argv[1:] if argv is None else argv)
-    if len(values) < 3:
+    if len(values) < 4:
         print("swoon sandbox setup failed: missing launcher arguments", file=sys.stderr)
         return 126
     seed = Path(values[0])
     workspace = Path(values[1])
-    command = values[2:]
+    try:
+        max_processes = int(values[2])
+    except ValueError:
+        print("swoon sandbox setup failed: invalid task limit", file=sys.stderr)
+        return 126
+    if max_processes < 1:
+        print("swoon sandbox setup failed: invalid task limit", file=sys.stderr)
+        return 126
+    command = values[3:]
     os.umask(0o077)
     try:
         _copy_tree(seed, workspace)
@@ -74,17 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 126
     os.write(sys.stdout.fileno(), _READY_MARKER)
-    try:
-        os.execvpe(command[0], command, os.environ)
-    except FileNotFoundError:
-        print(f"swoon command not found: {command[0]!r}", file=sys.stderr)
-        return 127
-    except OSError as error:
-        print(
-            f"swoon command could not start ({error.__class__.__name__})",
-            file=sys.stderr,
-        )
-        return 126
+    return _supervise(command, max_processes)
 
 
 if __name__ == "__main__":

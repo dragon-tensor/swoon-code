@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import random
 import unittest
 
 from swoon.aeml import AEMLParser, AEMLValidationError, AEMLValidator, PathRef, Root
@@ -55,6 +57,57 @@ class AEMLValidatorTests(unittest.TestCase):
             "input_readonly",
             '<action id="a1"><tool>create-file</tool><path root="input">x</path>'
             '<args><content>unsafe</content></args></action><next>await_result</next>',
+        )
+
+    def test_base64_text_argument_round_trips_exact_utf8(self) -> None:
+        samples = [
+            "",
+            "line one\n    indented\n\twith-tab\n",
+            "<xml> & symbols ' \"\n",
+            "Unicode: 雪 🌨️ café\n",
+        ]
+        generator = random.Random(0xA3E1)
+        alphabet = "abcXYZ0123 \t\n<>&雪"
+        samples.extend(
+            "".join(generator.choice(alphabet) for _ in range(generator.randrange(256)))
+            for _ in range(100)
+        )
+
+        for index, sample in enumerate(samples):
+            with self.subTest(index=index):
+                encoded = base64.b64encode(sample.encode("utf-8")).decode("ascii")
+                validated = self.validate(
+                    '<action id="a1"><tool>create-file</tool><path>x</path>'
+                    f'<args><content encoding="base64">{encoded}</content></args></action>'
+                    '<next>await_result</next>'
+                )
+                self.assertEqual(validated.actions[0].argument("content"), sample)
+
+    def test_invalid_base64_text_argument_is_rejected(self) -> None:
+        error = self.assert_code(
+            "invalid_argument",
+            '<action id="a1"><tool>create-file</tool><path>x</path>'
+            '<args><content encoding="base64">not base64!</content></args></action>'
+            '<next>await_result</next>',
+        )
+        self.assertIn("valid Base64", str(error))
+
+    def test_non_utf8_base64_text_argument_is_rejected(self) -> None:
+        encoded = base64.b64encode(b"\xff\xfe").decode("ascii")
+        error = self.assert_code(
+            "invalid_argument",
+            '<action id="a1"><tool>create-file</tool><path>x</path>'
+            f'<args><content encoding="base64">{encoded}</content></args></action>'
+            '<next>await_result</next>',
+        )
+        self.assertIn("UTF-8", str(error))
+
+    def test_base64_is_rejected_for_arguments_without_that_capability(self) -> None:
+        self.assert_code(
+            "invalid_argument",
+            '<action id="a1"><tool>grep</tool><path>x</path>'
+            '<args><pattern encoding="base64">eA==</pattern></args></action>'
+            '<next>await_result</next>',
         )
 
     def test_copy_destination_cannot_be_input(self) -> None:

@@ -28,11 +28,12 @@ therefore remains necessary.
 | Threat | Current controls | Residual risk / release test |
 |---|---|---|
 | Malformed, oversized, or entity-bearing XML | Byte/element/attribute/depth limits; DTD/entity/comment/PI/namespace refusal | Parser bugs; fixed-seed mutation smoke and security corpus |
+| Browser-rendered source corruption | One XML code block; exact code-node extraction; strict bounded Base64 for sensitive text arguments | Provider may violate framing; parser repair and lossless round-trip tests |
 | Prompt injection in task/project/result text | Deterministic XML escaping; explicit untrusted-data contract; fixed validator registry | Model may make poor choices within allowed tools; adversarial task evaluation and human review |
 | Capability invention or replay | Prompt/validator registry match; unique durable action IDs; turn/session binding | Provider output quality varies; corpus and live AEML run |
 | Host path or credential access | Virtual roots, no-follow descriptor opens, credential denylist, read-only imported input | Unknown credential filename or kernel/filesystem bug; regression tests and review |
 | Destructive output action | Output-only policy, exact persisted guard, separate human approval | Human can approve a bad action; prompt displays exact target/reason |
-| Command escape or network access | Shell-free argv checks, filtered snapshots, Bubblewrap namespaces, seccomp socket denial, resource limits | Kernel/Bubblewrap vulnerability; supported-host tests and independent review |
+| Command escape or network access | Shell-free argv checks, filtered snapshots, Bubblewrap namespaces, seccomp socket denial, baseline-aware outer limits, PID-namespace task supervisor | Kernel/Bubblewrap vulnerability; supported-host tests and independent review |
 | Process/PID confusion | Opaque live-supervisor handles; persisted PIDs are diagnostic only; restart becomes `lost` | Same-process supervisor defects; lifecycle regression tests |
 | Cookie disclosure | Owner-only regular file, bounded JSON/domain validation, opt-in private state/debug outputs | Compromised host or deliberately shared credential; revoke provider session |
 | Web UI drift | Multiple selectors, bounded waits, structured failure, no automatic screenshot | Selectors and auth flow can still break; owner-run live gate for every release |

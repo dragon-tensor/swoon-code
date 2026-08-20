@@ -7,9 +7,11 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from swoon.aeml import AEMLContextBuilder, AEMLParser, AEMLPromptBuilder, AEMLValidator
 from swoon.aeml.models import PathRef, ProtocolError, Result, ResultStatus, Root
+from swoon.policy import PathPolicy
 from swoon.session import SessionManager
 from swoon.tools import (
     IMPLEMENTED_BACKGROUND_TOOLS,
@@ -18,6 +20,7 @@ from swoon.tools import (
     AgentToolDispatcher,
     CommandToolLimits,
 )
+from swoon.tools.commands import ForegroundCommandTools, _current_user_task_count
 
 
 class ForegroundCommandToolTests(unittest.TestCase):
@@ -120,6 +123,45 @@ class ForegroundCommandToolTests(unittest.TestCase):
         self.assertIn("opaque handle", prompt.lower())
         self.assertIn('name="delete-file" effect="mutating"', prompt)
         self.assertIn("owner-private", prompt.lower())
+
+    def test_user_task_count_reads_real_uid_and_thread_totals(self) -> None:
+        proc = self.root / "proc"
+        (proc / "10").mkdir(parents=True)
+        (proc / "11").mkdir()
+        (proc / "not-a-pid").mkdir()
+        (proc / "10" / "status").write_text(
+            "Name:\tone\nUid:\t1000\t1000\t1000\t1000\nThreads:\t4\n",
+            encoding="utf-8",
+        )
+        (proc / "11" / "status").write_text(
+            "Name:\ttwo\nUid:\t2000\t2000\t2000\t2000\nThreads:\t8\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(_current_user_task_count(proc, real_uid=1000), 4)
+
+    def test_sandbox_nproc_limit_accounts_for_existing_desktop_tasks(self) -> None:
+        foreground = ForegroundCommandTools(
+            PathPolicy(self.session.paths),
+            CommandToolLimits(),
+        )
+        with patch(
+            "swoon.tools.commands._current_user_task_count",
+            return_value=1400,
+        ):
+            argv = foreground._sandbox_argv(
+                ["python3", "-V"],
+                output_snapshot=self.root / "output-snapshot",
+                input_snapshot=self.root / "input-snapshot",
+                filter_fd=9,
+                timeout=5,
+            )
+
+        self.assertIn("--nproc=1672", argv)
+        runner_index = max(
+            index for index, value in enumerate(argv) if value == "/swoon-runner.py"
+        )
+        self.assertEqual(argv[runner_index + 3], "256")
 
     def test_command_reads_seed_but_all_workspace_changes_are_discarded(self) -> None:
         self.require_runtime()
@@ -288,6 +330,28 @@ class ForegroundCommandToolTests(unittest.TestCase):
         self.assertIsInstance(response, ProtocolError)
         self.assertEqual(response.code, "output_limit_exceeded")
         self.assertIsNone(self.manager.load(self.session.id).state.action("command_capture"))
+
+    def test_pid_namespace_supervisor_enforces_command_task_limit(self) -> None:
+        self.require_runtime()
+        limited = AgentToolDispatcher(
+            self.manager,
+            command_limits=CommandToolLimits(max_processes=2),
+        )
+        response = limited.execute(
+            self.action(
+                "command_process_limit",
+                "<tool>run-command</tool><args><cmd><![CDATA["
+                "python3 -c \"import subprocess,time; "
+                "children=[subprocess.Popen(['python3','-c','import time;time.sleep(5)']) "
+                "for _ in range(4)]; time.sleep(5)\""
+                "]]></cmd><timeout>8</timeout></args>",
+            ),
+            self.session,
+        )
+
+        self.assertIsInstance(response, Result)
+        self.assertEqual(response.status, ResultStatus.FAILURE)
+        self.assertIn("exceeded the 2-task sandbox limit", response.body)
 
     def test_missing_or_failed_sandbox_never_falls_back_to_host_execution(self) -> None:
         marker = self.root / "must-not-exist"

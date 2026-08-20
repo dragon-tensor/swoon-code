@@ -52,6 +52,32 @@ class AEMLParserTests(unittest.TestCase):
         self.assertEqual(message.actions[0].chunk.seq, 1)
         self.assertTrue(message.actions[0].chunk.final)
 
+    def test_single_xml_markdown_fence_is_unwrapped_losslessly(self) -> None:
+        source = """```xml
+<aeml turn="1" session="sess_fenced">
+  <action id="c1"><tool>create-file</tool><path>app.py</path>
+    <args><content><![CDATA[def greet(name):
+    return f"Hello, {name}!"
+]]></content></args>
+  </action>
+  <next>await_result</next>
+</aeml>
+```"""
+
+        message = self.parser.parse(source)
+
+        self.assertEqual(
+            message.actions[0].argument("content").value,
+            'def greet(name):\n    return f"Hello, {name}!"\n',
+        )
+
+    def test_fenced_xml_with_surrounding_prose_is_rejected(self) -> None:
+        with self.assertRaises(AEMLParseError):
+            self.parser.parse(
+                "Here is the result:\n```xml\n"
+                '<aeml turn="1" session="sess_x"><next>proceed</next></aeml>\n```'
+            )
+
     def test_missing_closing_envelope_is_classified_as_truncation(self) -> None:
         with self.assertRaises(AEMLTruncatedError) as raised:
             self.parser.parse(

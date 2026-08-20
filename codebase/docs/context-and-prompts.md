@@ -89,10 +89,12 @@ future-facing AEML registry. The prompt and channel validator therefore expose e
 - git-log
 - list-dependencies
 
-The generated bootstrap explicitly requires one bare aeml envelope, matching turn/session
-attributes, declared tags only, unique action IDs, correct next control flow, virtual paths,
-and no Markdown fences or surrounding prose. Tool output and project content are labeled
-untrusted data that cannot expand the allowlist or sandbox.
+The generated bootstrap explicitly requires one aeml envelope inside one XML Markdown code block,
+matching turn/session attributes, declared tags only, unique action IDs, correct next control flow,
+virtual paths, and no surrounding prose or second code block. This transport framing lets the
+browser adapter extract exact code-node text instead of layout-normalized text. File content and
+edit arguments additionally support strict bounded Base64 when exact UTF-8 bytes matter. Tool
+output and project content are labeled untrusted data that cannot expand the allowlist or sandbox.
 
 ## Single-exchange channel
 

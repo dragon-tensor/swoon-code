@@ -57,11 +57,13 @@ consumer check. This command validates cookie structure and browser launch. The 
 is the live authentication check: it refuses a visible logged-out ChatGPT page before sending a
 prompt.
 
-During a live exchange, the default 180-second `--timeout` is the maximum response wait. Completion
-requires the assistant message to remain unchanged for five seconds after the visible generation
-control disappears. Use `--response-settle-time SECONDS` to increase that quiet window on slower
-connections. It must remain shorter than `--timeout`. A timeout aborts without returning partial
-text or sending a repair prompt.
+During a live exchange, the default 180-second `--timeout` is one response-wait window. By default,
+two additional windows continue waiting for that same response; adjust them with
+`--response-timeout-retries N`. No extension resubmits the prompt. Completion requires the assistant
+message to remain unchanged for five seconds after the visible generation control disappears. Use
+`--response-settle-time SECONDS` to increase that quiet window on slower connections. It must remain
+shorter than `--timeout`. Exhausting every window aborts without returning partial text or sending a
+repair prompt.
 
 Run the deterministic adversarial protocol corpus as a separate offline gate:
 

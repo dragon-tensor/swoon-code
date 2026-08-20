@@ -40,6 +40,54 @@ _URL_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _TRAVERSAL = re.compile(r"(?:^|[=/])\.\.(?:/|$)")
 _XML_ALLOWED_CONTROLS = {"\t", "\n", "\r"}
 _SANDBOX_READY_MARKER = b"\x1eSWOON_SANDBOX_READY\x1e\n"
+_SANDBOX_STARTUP_TASK_ALLOWANCE = 16
+
+
+def _current_user_task_count(
+    proc_root: Path = Path("/proc"),
+    *,
+    real_uid: int | None = None,
+) -> int:
+    """Return the current Linux task count charged to one real user ID.
+
+    RLIMIT_NPROC is charged against all threads owned by the real UID, not just
+    processes created by Swoon. Counting that baseline prevents a busy desktop
+    or browser session from consuming the sandbox's entire launch allowance.
+    """
+
+    selected_uid = os.getuid() if real_uid is None else real_uid
+    total = 0
+    try:
+        entries = proc_root.iterdir()
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.name.isdecimal():
+            continue
+        try:
+            status = (entry / "status").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        owner: int | None = None
+        threads = 1
+        for line in status.splitlines():
+            if line.startswith("Uid:"):
+                fields = line.split()
+                if len(fields) >= 2:
+                    try:
+                        owner = int(fields[1])
+                    except ValueError:
+                        owner = None
+            elif line.startswith("Threads:"):
+                fields = line.split()
+                if len(fields) == 2:
+                    try:
+                        threads = max(1, int(fields[1]))
+                    except ValueError:
+                        threads = 1
+        if owner == selected_uid:
+            total += threads
+    return total
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,12 +286,17 @@ class ForegroundCommandTools:
         assert self.python_binary is not None
         output_root = self.policy.session_paths.output_root
         input_root = self.policy.session_paths.input_root
+        user_task_limit = (
+            _current_user_task_count()
+            + self.limits.max_processes
+            + _SANDBOX_STARTUP_TASK_ALLOWANCE
+        )
         command = [
             str(self.resource_limiter_binary),
             f"--cpu={timeout + 1}:{timeout + 2}",
             f"--as={self.limits.address_space_bytes}",
             f"--fsize={self.limits.max_file_bytes}",
-            f"--nproc={self.limits.max_processes}",
+            f"--nproc={user_task_limit}",
             f"--nofile={self.limits.max_open_files}",
             "--core=0",
             "--",
@@ -382,6 +435,7 @@ class ForegroundCommandTools:
                 "/swoon-runner.py",
                 "/swoon-seed",
                 output_root,
+                str(self.limits.max_processes),
                 *argv,
             )
         )

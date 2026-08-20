@@ -432,6 +432,37 @@ class CLITests(unittest.TestCase):
         self.assertIn("<user_prompt>Blue</user_prompt>", browser.prompts[1])
         self.assertEqual(stderr, "")
 
+    def test_interactive_agent_paste_mode_preserves_a_multiline_task(self) -> None:
+        session_id = "sess_cli_multiline"
+        browser = FakeBrowserTransport(
+            [
+                (
+                    f'<aeml turn="1" session="{session_id}">'
+                    "<complete>Multiline task received.</complete></aeml>"
+                )
+            ]
+        )
+
+        code, stdout, stderr = self.invoke(
+            self.agent_args(
+                "--interactive",
+                "--session-id",
+                session_id,
+                "--max-steps",
+                "2",
+            ),
+            browser,
+            inputs=["/paste", "Build this project.", "- include tests", "/end", "/quit"],
+        )
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertIn(
+            "<user_prompt>Build this project.\n- include tests</user_prompt>",
+            browser.prompts[0],
+        )
+        self.assertIn("Paste mode", stdout)
+        self.assertEqual(stderr, "")
+
     def test_interactive_agent_console_accepts_follow_up_tasks(self) -> None:
         session_id = "sess_cli_console"
         browser = FakeBrowserTransport(

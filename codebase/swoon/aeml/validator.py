@@ -7,6 +7,8 @@ are deliberately left to later policy phases.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from collections.abc import Collection, Mapping
 
@@ -35,6 +37,7 @@ _SESSION_ID = re.compile(r"sess_[A-Za-z0-9_-]{1,64}\Z")
 _ACTION_ID = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}\Z")
 _INTEGER = re.compile(r"-?[0-9]+\Z")
 _CHMOD_MODE = re.compile(r"0?(?:600|700)\Z")
+_MAX_DECODED_TEXT_BYTES = 512 * 1024
 
 
 class AEMLValidator:
@@ -269,6 +272,33 @@ class AEMLValidator:
         spec: ArgumentSpec,
     ) -> TypedValue:
         attributes = dict(argument.attributes)
+        if spec.kind is ArgumentKind.TEXT:
+            unknown_attributes = set(attributes) - {"encoding"}
+            encoding = attributes.get("encoding")
+            if unknown_attributes or (encoding is not None and not spec.allow_base64):
+                names = ", ".join(sorted(attributes))
+                raise AEMLValidationError(
+                    "invalid_argument",
+                    f"Argument {argument.name!r} does not accept attribute(s): {names}",
+                    action_id=action.id,
+                )
+            value = argument.value
+            if encoding is not None:
+                if encoding != "base64":
+                    raise AEMLValidationError(
+                        "invalid_argument",
+                        f"Argument {argument.name!r} encoding must be base64",
+                        action_id=action.id,
+                    )
+                value = self._decode_base64_text(action, argument)
+            if not spec.allow_empty and not value.strip():
+                raise AEMLValidationError(
+                    "invalid_argument",
+                    f"Argument {argument.name!r} cannot be empty",
+                    action_id=action.id,
+                )
+            return value
+
         if spec.kind is not ArgumentKind.PATH and attributes:
             names = ", ".join(sorted(attributes))
             raise AEMLValidationError(
@@ -276,15 +306,6 @@ class AEMLValidator:
                 f"Argument {argument.name!r} does not accept attribute(s): {names}",
                 action_id=action.id,
             )
-
-        if spec.kind is ArgumentKind.TEXT:
-            if not spec.allow_empty and not argument.value.strip():
-                raise AEMLValidationError(
-                    "invalid_argument",
-                    f"Argument {argument.name!r} cannot be empty",
-                    action_id=action.id,
-                )
-            return argument.value
 
         value = argument.value.strip()
         if spec.kind is ArgumentKind.INTEGER:
@@ -370,6 +391,38 @@ class AEMLValidator:
             return PathRef(value=value, root=root)
 
         raise AssertionError(f"Unhandled argument kind: {spec.kind}")
+
+    @staticmethod
+    def _decode_base64_text(action: Action, argument: Argument) -> str:
+        encoded = argument.value
+        if len(encoded) > ((_MAX_DECODED_TEXT_BYTES + 2) // 3) * 4:
+            raise AEMLValidationError(
+                "invalid_argument",
+                f"Argument {argument.name!r} decoded text is too large",
+                action_id=action.id,
+            )
+        try:
+            payload = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise AEMLValidationError(
+                "invalid_argument",
+                f"Argument {argument.name!r} must contain valid Base64",
+                action_id=action.id,
+            ) from error
+        if len(payload) > _MAX_DECODED_TEXT_BYTES:
+            raise AEMLValidationError(
+                "invalid_argument",
+                f"Argument {argument.name!r} decoded text is too large",
+                action_id=action.id,
+            )
+        try:
+            return payload.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise AEMLValidationError(
+                "invalid_argument",
+                f"Argument {argument.name!r} Base64 payload must decode as UTF-8",
+                action_id=action.id,
+            ) from error
 
     @staticmethod
     def _validate_cross_field_rules(

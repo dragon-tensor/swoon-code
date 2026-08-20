@@ -82,6 +82,8 @@ options are:
 - `--save-storage-state PATH` — explicitly persist refreshed credentials with owner-only mode;
 - `--debug-artifacts DIRECTORY` — explicitly allow uniquely named private startup screenshots;
 - `--timeout SECONDS` — set the positive maximum wait for a complete response;
+- `--response-timeout-retries N` — allow 0 through 10 additional wait windows for the same
+  response without submitting the prompt again (default: 2);
 - `--response-settle-time SECONDS` — require this many unchanged seconds after generation stops
   before accepting a response (default: 5, and it must be shorter than `--timeout`).
 
@@ -91,9 +93,11 @@ storage failures are reported rather than silently ignored.
 
 The browser transport refuses to submit a new AEML turn while ChatGPT exposes a visible generation
 control. It then waits for the new assistant message to remain unchanged for the configured settle
-window. A response timeout is a hard failure: partial output is not parsed and cannot trigger an
-automatic repair prompt. Each multiline AEML prompt is filled atomically and submitted with one
-explicit Send click, so its line endings cannot become accidental submissions.
+window. On a response timeout it can extend the wait for the same browser message; it never clicks
+Send again. After every configured window is exhausted, partial output is not parsed and cannot
+trigger an automatic repair prompt. Each multiline AEML prompt is filled atomically and submitted
+with one explicit Send click, so its line endings cannot become accidental submissions. A single
+assistant XML code block is extracted with exact DOM text rather than rendered layout text.
 
 Without `--interactive`, omitting `--prompt` asks once for the initial task before creating a new
 session. `--interactive` starts a persistent terminal coding-agent console instead: each completed
@@ -102,7 +106,9 @@ and validated action history. Direct messages use `[swoon-code]`; `-->> [plan]` 
 AEML plan, and `>>` shows live tool activity and results. ANSI contrast and red/green/yellow severity
 are enabled on capable terminals; `NO_COLOR=1` keeps the semantic prefixes but disables color. The
 private AEML `<thought>` field is never displayed. Enter `/quit` to pause the session for
-`swoon NAME` to resume later, or `/abort` to make it terminal. The
+`swoon NAME` to resume later, or `/abort` to make it terminal. Bracketed terminal paste is accepted
+as one multiline instruction. `/paste` begins an explicit fallback mode terminated by `/end` on its
+own line. The
 `--non-interactive` mode instead requires `--prompt` and returns exit 6 if it is absent.
 
 The CLI prints `Session: sess_...` and the human-side physical output path before browser startup.

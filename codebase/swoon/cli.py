@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import platform
 import shutil
@@ -205,6 +206,7 @@ def _add_session_directory_argument(parser: argparse.ArgumentParser) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Run the Swoon CLI, accepting both subcommands and legacy relay flags."""
 
+    _configure_terminal_input()
     raw = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     if not raw:
@@ -426,13 +428,19 @@ def _add_browser_arguments(
         "--timeout",
         type=_positive_timeout,
         default=180.0,
-        help="maximum response wait in seconds (default: 180)",
+        help="length of each response-wait window in seconds (default: 180)",
     )
     parser.add_argument(
         "--response-settle-time",
         type=_positive_timeout,
         default=5.0,
         help="unchanged seconds required before a response is complete (default: 5)",
+    )
+    parser.add_argument(
+        "--response-timeout-retries",
+        type=_response_timeout_retries,
+        default=2,
+        help="extra response-wait windows without resending (default: 2)",
     )
 
 
@@ -448,11 +456,13 @@ def _run_chat(args: argparse.Namespace) -> int:
         client = _transport(args)
         client.start()
         if args.interactive:
-            ui.status("ChatGPT relay ready. Type /quit to exit.")
+            ui.status("ChatGPT relay ready. Type /paste for multiline input or /quit to exit.")
             while True:
                 try:
-                    message = input(ui.prompt()).strip()
+                    message = _read_message(ui)
                 except (EOFError, KeyboardInterrupt):
+                    break
+                if message is None:
                     break
                 if not message:
                     continue
@@ -519,7 +529,10 @@ def _run_agent(args: argparse.Namespace) -> int:
 
     if args.interactive:
         ui.status("Swoon Code interactive agent")
-        ui.status("Enter a coding task at [user@swoon-code]. Type /quit to pause.")
+        ui.status(
+            "Enter a coding task at [user@swoon-code]. "
+            "Type /paste for multiline input or /quit to pause."
+        )
 
     if session is not None:
         ui.status(f"Session: {session.id}")
@@ -817,12 +830,44 @@ def _initial_prompt(args: argparse.Namespace, ui: TerminalUI) -> str | None:
 def _read_nonempty(ui: TerminalUI) -> str | None:
     while True:
         try:
-            value = input(ui.prompt()).strip()
+            value = _read_message(ui)
         except EOFError:
+            return None
+        if value is None:
             return None
         if value:
             return value
         ui.warning("Input cannot be empty.")
+
+
+def _read_message(ui: TerminalUI) -> str | None:
+    """Read one task, with bracketed-paste support and an explicit paste fallback."""
+
+    value = input(ui.prompt()).strip()
+    if value != "/paste":
+        return value
+    ui.status("Paste mode: enter any number of lines, then type /end on its own line.")
+    lines: list[str] = []
+    while True:
+        try:
+            line = input(ui.prompt("paste>"))
+        except EOFError:
+            return "\n".join(lines).strip() if lines else None
+        if line.strip() == "/end":
+            return "\n".join(lines).strip()
+        lines.append(line)
+
+
+def _configure_terminal_input() -> None:
+    """Make a terminal bracketed paste arrive as one multiline ``input`` value."""
+
+    if not getattr(sys.stdin, "isatty", lambda: False)():
+        return
+    try:
+        readline = importlib.import_module("readline")
+        readline.parse_and_bind("set enable-bracketed-paste on")
+    except (ImportError, AttributeError, RuntimeError):
+        return
 
 
 def _read_step_extension(
@@ -885,6 +930,7 @@ def _transport(args: argparse.Namespace) -> ChatGPTWebTransport:
         verbose=args.verbose,
         headless=not args.headed,
         response_timeout=args.timeout,
+        response_timeout_retries=args.response_timeout_retries,
         response_settle_time=args.response_settle_time,
         storage_state_path=args.save_storage_state,
         debug_directory=args.debug_artifacts,
@@ -1076,6 +1122,15 @@ def _additional_steps(value: str) -> int:
 
 def _protocol_retries(value: str) -> int:
     return _bounded_integer(value, minimum=0, maximum=10, label="protocol-retries")
+
+
+def _response_timeout_retries(value: str) -> int:
+    return _bounded_integer(
+        value,
+        minimum=0,
+        maximum=10,
+        label="response-timeout-retries",
+    )
 
 
 def _bounded_integer(value: str, *, minimum: int, maximum: int, label: str) -> int:

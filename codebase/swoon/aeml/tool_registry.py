@@ -19,8 +19,19 @@ OUTPUT_ROOT = frozenset({Root.OUTPUT})
 PACKAGE_MANAGERS = ("pip", "npm", "pnpm", "yarn", "cargo", "go", "bundler", "composer")
 
 
-def text_arg(name: str, *, required: bool = False, allow_empty: bool = False) -> ArgumentSpec:
-    return ArgumentSpec(name, required=required, allow_empty=allow_empty)
+def text_arg(
+    name: str,
+    *,
+    required: bool = False,
+    allow_empty: bool = False,
+    allow_base64: bool = False,
+) -> ArgumentSpec:
+    return ArgumentSpec(
+        name,
+        required=required,
+        allow_empty=allow_empty,
+        allow_base64=allow_base64,
+    )
 
 
 def int_arg(
@@ -126,7 +137,7 @@ _SPECS = (
     ToolSpec(
         "create-file",
         ToolEffect.MUTATING,
-        (text_arg("content", required=True, allow_empty=True),),
+        (text_arg("content", required=True, allow_empty=True, allow_base64=True),),
         path_required=True,
         path_allowed=True,
         path_roots=OUTPUT_ROOT,
@@ -136,7 +147,7 @@ _SPECS = (
     ToolSpec(
         "overwrite-file",
         ToolEffect.MUTATING,
-        (text_arg("content", required=True, allow_empty=True),),
+        (text_arg("content", required=True, allow_empty=True, allow_base64=True),),
         path_required=True,
         path_allowed=True,
         path_roots=OUTPUT_ROOT,
@@ -147,7 +158,7 @@ _SPECS = (
     ToolSpec(
         "append-file",
         ToolEffect.MUTATING,
-        (text_arg("content", required=True, allow_empty=True),),
+        (text_arg("content", required=True, allow_empty=True, allow_base64=True),),
         path_required=True,
         path_allowed=True,
         path_roots=OUTPUT_ROOT,
@@ -157,7 +168,10 @@ _SPECS = (
     ToolSpec(
         "edit-file",
         ToolEffect.MUTATING,
-        (text_arg("old_str", required=True), text_arg("new_str", required=True, allow_empty=True)),
+        (
+            text_arg("old_str", required=True, allow_base64=True),
+            text_arg("new_str", required=True, allow_empty=True, allow_base64=True),
+        ),
         path_required=True,
         path_allowed=True,
         path_roots=OUTPUT_ROOT,

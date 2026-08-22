@@ -316,7 +316,7 @@ validated = AEMLValidator().validate(
 responses = ReadOnlyToolDispatcher(sessions).execute_message(validated, session)
 ```
 
-This compatibility example executes only validated reads on the Phase 7 allowlist. Successes are
+This compatibility example executes only validated reads on the read-only allowlist. Successes are
 persisted for idempotent replay; failures are returned as structured protocol errors.
 
 To send one protocol turn through the browser transport:
@@ -359,7 +359,7 @@ To let the interpreter own a read-only compatibility loop:
 
 `outcome.reason` reports completion, a user pause, the step limit, abort, or protocol failure.
 If a step limit is reached, only a later human-side call with `additional_steps=N` can extend
-it. See the orchestration guide for pause/resume examples and exact failure semantics.
+it. See the agent CLI and protocol guides for pause/resume behavior and failure semantics.
 
 The `swoon agent` command instead opts into `AgentToolDispatcher` and `AgentOrchestrator`, using
 one capability-derived prompt/validator allowlist for the seven reads, eleven filesystem
@@ -382,29 +382,25 @@ additional restriction on the Apache-2.0 license.
 ## Documentation
 
 - `aeml_protocol_spec.md` — protocol contract
-- `docs/session-management.md` — persistent session boundary
 - `docs/path-policy.md` — virtual path policy
-- `docs/read-only-tools.md` — Phase 7 execution behavior
-- `docs/context-and-prompts.md` — Phase 8 context and transport bridge
-- `docs/read-only-orchestration.md` — Phase 9 autonomous read-only loop
-- `docs/agent-cli.md` — Phase 10 command-line lifecycle and exit codes
-- `docs/filesystem-mutations.md` — Phase 11 write boundary and confirmation lifecycle
-- `docs/foreground-commands.md` — Phase 12 offline foreground execution boundary
-- `docs/background-commands.md` — Phase 13 supervised background lifecycle
-- `docs/filesystem-lifecycle.md` — Phase 14 guarded delete/move/rename/chmod boundary
-- `docs/consumer-testing.md` — Phase 15 wheel build, installation, doctor, and acceptance flow
-- `docs/dependency-changes.md` — Phase 16 exact declaration and lockfile safety boundary
-- `docs/supported-scope.md` — Phase 18 product, platform, and transport support boundary
-- `docs/session-cli.md` — Phase 19 human-side output export and retained-session management
-- `docs/security-model.md` — Phase 20 trust boundaries and adversarial/live release gates
-- `docs/release-checklist.md` — Phase 21 offline, live, tag, and publication gates
+- `docs/context-and-prompts.md` — context construction and transport integration
+- `docs/agent-cli.md` — command-line lifecycle, interaction, and exit codes
+- `docs/filesystem-mutations.md` — persistent output writes and confirmation lifecycle
+- `docs/filesystem-lifecycle.md` — guarded delete, move, rename, and chmod behavior
+- `docs/dependency-changes.md` — exact declaration and lockfile safety boundary
+- `docs/foreground-commands.md` — offline foreground execution boundary
+- `docs/background-commands.md` — supervised background process lifecycle
+- `docs/session-cli.md` — output export and retained-session management
+- `docs/consumer-testing.md` — installation, diagnostics, packaging, and acceptance checks
+- `docs/supported-scope.md` — supported product, platform, and transport boundary
+- `docs/security-model.md` — trust boundaries and adversarial/live release gates
+- `docs/release-checklist.md` — offline, live, tag, and publication gates
 - `RESPONSIBLE_USE.md` — educational purpose, non-affiliation, and user responsibility
 - `SECURITY.md` — private vulnerability reporting and supported security scope
 - `SUPPORT.md` — issue-reporting and redaction expectations
 - `CONTRIBUTING.md` — development, testing, and contribution policy
 - `CHANGELOG.md` — release-candidate history
 - `THIRD_PARTY_NOTICES.md` — dependency and external-runtime notices
-- `MIGRATION.md` — original relay history
 
 ## Tests
 

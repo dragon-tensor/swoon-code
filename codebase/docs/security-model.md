@@ -1,9 +1,8 @@
 # Security model and adversarial verification
 
-Phase 20 records the trust boundaries that Swoon relies on and supplies deterministic adversarial
-and opt-in live release gates. Phase 21 adds reproducible package, SBOM, checksum, manifest, CI, and
-tag/publication controls. This document is a threat model, not a claim that sandboxed software is
-invulnerable.
+This document records Swoon's trust boundaries, deterministic adversarial checks, opt-in live
+release gate, reproducible packages, SBOM, checksums, manifest, CI, and tag/publication controls.
+It is a threat model, not a claim that sandboxed software is invulnerable.
 
 ## Assets and trust boundaries
 

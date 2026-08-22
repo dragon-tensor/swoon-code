@@ -1,16 +1,10 @@
 # Agent CLI
 
-Phase 10 exposed the bounded engine as `swoon agent` while preserving the original raw relay as
-`swoon chat`. Phase 11 keeps that lifecycle and adds six output-only filesystem mutations:
-`create-file`, `overwrite-file`, `append-file`, `edit-file`, `copy-file`, and `copy-dir`, in
-addition to the seven read tools. Phase 12 adds four offline foreground tools: `run-command`,
-`run-build`, `run-tests`, and `run-linter`. Their filesystems are disposable, so only explicit
-filesystem tools persist output changes. Phase 13 adds `run-command-background`, `stream-output`,
-and `kill-process` with the same disposable, offline boundary. Package operations, Git mutations,
-and networked services stay disabled. Phase 14 adds persistent `delete-file`, `delete-dir`,
-`move`, `rename`, and restricted `chmod`; deletion reuses the exact-action decision flow below.
-Phase 16 adds guarded `install-dependency` and `remove-dependency` declaration changes. Despite
-their protocol names, they do not download artifacts, execute package managers, or refresh locks.
+`swoon agent` runs the bounded coding engine; `swoon chat` remains available as an unstructured
+relay. The agent exposes seven read tools, eleven output-only filesystem tools, four disposable
+foreground commands, three supervised background commands, and two guarded dependency-declaration
+tools. Only explicit filesystem tools persist output changes. Package artifact installation, Git
+mutations, networked services, and direct host command execution remain disabled.
 
 On supported 64-bit Linux hosts, foreground execution requires `bwrap`, `prlimit`, and a system
 `python3`. Missing sandbox primitives return a tool error to the agent; the CLI never falls back
@@ -19,7 +13,7 @@ to running a command directly on the host. See `foreground-commands.md` and
 
 ## Installation diagnostic
 
-Phase 15 adds a consumer check that does not contact ChatGPT:
+The consumer diagnostic does not contact ChatGPT:
 
 ```bash
 swoon doctor

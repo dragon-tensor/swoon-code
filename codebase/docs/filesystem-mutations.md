@@ -1,7 +1,7 @@
 # Output filesystem mutations
 
-Phase 11 added the first writable AEML boundary. `AgentToolDispatcher` now exposes the seven
-read-only tools plus eleven filesystem mutations. Its six content/copy tools are:
+`AgentToolDispatcher` exposes seven read-only tools plus eleven filesystem mutations. Its six
+content/copy tools are:
 
 - `create-file`
 - `overwrite-file`
@@ -10,12 +10,12 @@ read-only tools plus eleven filesystem mutations. Its six content/copy tools are
 - `copy-file`
 - `copy-dir`
 
-Phase 14 adds `delete-file`, `delete-dir`, `move`, `rename`, and `chmod` through the same output
-boundary; see [Persistent filesystem lifecycle](filesystem-lifecycle.md). Input remains read-only,
-and Git mutations remain disabled. Phase 16 dependency declaration changes reuse the same atomic
+`delete-file`, `delete-dir`, `move`, `rename`, and `chmod` use the same output boundary; see
+[Persistent filesystem lifecycle](filesystem-lifecycle.md). Input remains read-only, and Git
+mutations remain disabled. Dependency declaration changes reuse the same atomic
 file and no-follow boundary through a narrower structured interface; see
-[Guarded dependency declarations](dependency-changes.md). Phase 12 command/build/test/linter
-execution and Phase 13 background commands use separate disposable sandboxes; they cannot persist
+[Guarded dependency declarations](dependency-changes.md). Foreground and background commands use
+separate disposable sandboxes; they cannot persist
 filesystem changes or bypass these mutation rules.
 
 ## Operation semantics
@@ -54,13 +54,13 @@ supported filesystem. No successful action result is persisted in that case.
 
 ## Destructive confirmation
 
-Replacing a non-empty file requires two independent signals. Phase 14 deletion uses the same
+Replacing a non-empty file requires two independent signals. Deletion uses the same
 persisted decision lifecycle and always requires both signals:
 
 1. AEML must declare `<expect_confirm>true</expect_confirm>`.
 2. The embedding host must approve the persisted action through `confirmation=True` or the CLI.
 
-Phase 16 dependency changes also require these two signals. The session stores the exact raw
+Dependency changes also require these two signals. The session stores the exact raw
 action, reserved action ID, reason, timestamp, and an opaque
 guard derived from the target's identity, metadata, and content hash. Status becomes
 `waiting_user`. Approval can therefore occur in another process without trusting the model to
@@ -93,7 +93,7 @@ chunk advancement, and successful action result are committed to session state t
 the filesystem operation. Reads, edits, copies, lifecycle changes, dependency inspection or
 mutation, and Git diffs that depend on an unfinished output are blocked with `write_incomplete`
 until `final="true"`.
-Successful Phase 14 moves remap finalized chunk paths; successful deletions remove records under
+Successful moves remap finalized chunk paths; successful deletions remove records under
 the deleted scope.
 
 ## APIs

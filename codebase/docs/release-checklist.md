@@ -1,8 +1,7 @@
 # Release checklist
 
-This checklist is the Phase 21 release boundary. Automated checks establish an offline-verified
-candidate; a release owner remains responsible for provider permission, live behavior, legal
-review, and the final publication decision.
+Automated checks establish an offline-verified candidate; a release owner remains responsible for
+provider permission, live behavior, legal review, and the final publication decision.
 
 ## Prepare
 

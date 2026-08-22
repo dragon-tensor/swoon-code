@@ -1,7 +1,7 @@
 # Consumer session management
 
-Phase 19 exposes persisted work to the human without giving AEML any new authority. Session
-management commands are local operations and never start a browser or contact a hosted service.
+Session management exposes persisted work to the human without giving AEML any new authority.
+These commands are local operations and never start a browser or contact a hosted service.
 Named consumer sessions use the configured `work/` root. The legacy `--session-dir` option remains
 available for embedded or older layouts.
 

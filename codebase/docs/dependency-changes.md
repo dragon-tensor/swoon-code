@@ -1,9 +1,9 @@
 # Guarded dependency declarations
 
-Phase 16 enables `install-dependency` and `remove-dependency` in `AgentToolDispatcher`. The names
-come from the AEML protocol, but this phase deliberately implements declaration changes—not
-package artifact installation. No package manager is launched, no network socket is opened, no
-user cache or configuration is read, and no dependency script can execute.
+`AgentToolDispatcher` exposes `install-dependency` and `remove-dependency`. The names come from the
+AEML protocol, but these tools deliberately implement declaration changes—not package artifact
+installation. No package manager is launched, no network socket is opened, no user cache or
+configuration is read, and no dependency script can execute.
 
 Every change requires both `<expect_confirm>true</expect_confirm>` in AEML and a real host-side
 approval. The confirmation guard binds the manifest path, device, inode, mode, timestamps, byte
@@ -35,7 +35,7 @@ remain available for human-directed exceptional manifest edits.
 ## Lockfiles and artifacts
 
 The interpreter cannot honestly update a dependency lock without a resolver and verified package
-metadata. Phase 16 therefore fails with `lockfile_present` when a related lock exists:
+metadata. The interpreter therefore fails with `lockfile_present` when a related lock exists:
 
 - Python: `poetry.lock`, `uv.lock`, or `Pipfile.lock`
 - JavaScript: `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, or `yarn.lock`

@@ -1,7 +1,7 @@
 # AEML context, prompts, and single exchanges
 
-Phase 8 connects the protocol boundary to any synchronous text transport without starting an
-autonomous agent loop.
+The context and channel APIs connect the protocol boundary to any synchronous text transport
+without starting an autonomous agent loop.
 
     managed Session
           │
@@ -19,8 +19,8 @@ autonomous agent loop.
 
 Each channel call performs exactly one exchange. It does not execute the returned actions,
 mutate session state, retry the chatbot, ask the user, or decide whether another turn should
-run. Phase 9's `ReadOnlyOrchestrator` composes this deliberately inert boundary into a bounded
-loop; see `read-only-orchestration.md`.
+run. `ReadOnlyOrchestrator` composes this deliberately inert boundary into a bounded compatibility
+loop; the current full-agent lifecycle is documented in `agent-cli.md`.
 
 ## Context construction
 

@@ -1,6 +1,6 @@
 # Virtual path policy
 
-Phase 6 adds a single authorization boundary for all future filesystem tools. It resolves
+The path policy is the single authorization boundary for filesystem tools. It resolves
 AEML's logical `/input/<session_id>` and `/output/<session_id>` roots to the private physical
 directories owned by `SessionManager`.
 
@@ -40,13 +40,13 @@ A `ResolvedPath` records device/inode/type fingerprints for the root and every e
 component. A tool must call `policy.revalidate(resolved)` immediately before use. Replacement,
 newly created targets, deleted parents, or inserted links become `path_changed` failures.
 
-This closes the policy-time gap but does not replace safe filesystem syscalls. The Phase 7 read
-tools and Phase 11 mutations additionally use descriptor-relative no-follow primitives and
-verify opened entries. Raw LLM paths are never passed directly to file or shell operations.
+This closes the policy-time gap but does not replace safe filesystem syscalls. Read and mutation
+tools additionally use descriptor-relative no-follow primitives and verify opened entries. Raw
+LLM paths are never passed directly to file or shell operations.
 
 The path policy itself only authorizes. Separate tool layers perform reads and the eleven enabled
-output mutations. Phase 14 delete/move/rename/chmod revalidate through descriptor-relative,
-no-follow operations; deletion additionally guards the complete bounded target snapshot. Phase 12
-foreground execution uses the same policy while building filtered snapshots, and Phase 13 retains
-those snapshots only for bounded supervised background work. Both command modes run only in
-disposable OS sandboxes.
+output mutations. Delete, move, rename, and chmod revalidate through descriptor-relative,
+no-follow operations; deletion additionally guards the complete bounded target snapshot.
+Foreground execution uses the same policy while building filtered snapshots, and background work
+retains those snapshots only for bounded supervised jobs. Both command modes run only in disposable
+OS sandboxes.

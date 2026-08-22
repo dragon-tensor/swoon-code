@@ -28,7 +28,6 @@ ROOT_FILES = (
     "CHANGELOG.md",
     "CONTRIBUTING.md",
     "LICENSE",
-    "MIGRATION.md",
     "NOTICE",
     "README.md",
     "RESPONSIBLE_USE.md",

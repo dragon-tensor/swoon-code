@@ -1,6 +1,6 @@
 # Supervised background commands
 
-Phase 13 enables three capabilities on `AgentToolDispatcher`:
+`AgentToolDispatcher` exposes three supervised background capabilities:
 
 - `run-command-background`
 - `stream-output`
@@ -8,7 +8,7 @@ Phase 13 enables three capabilities on `AgentToolDispatcher`:
 
 They support long-running offline checks and watchers without blocking an AEML turn. They are not
 host processes, persistent jobs, or networked dev servers. Every command runs inside the same
-filtered, disposable Bubblewrap boundary used by Phase 12 foreground execution: socket creation
+filtered, disposable Bubblewrap boundary used by foreground execution: socket creation
 is denied, output/input snapshots are isolated, and command-side filesystem changes are discarded.
 
 ## Launch and ownership

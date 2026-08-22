@@ -1,6 +1,6 @@
 # Persistent filesystem lifecycle
 
-Phase 14 adds five output-only tools to `AgentToolDispatcher`:
+`AgentToolDispatcher` exposes five output-only lifecycle tools:
 
 - `delete-file`
 - `delete-dir`
@@ -8,7 +8,7 @@ Phase 14 adds five output-only tools to `AgentToolDispatcher`:
 - `rename`
 - `chmod`
 
-They extend the Phase 11 mutation boundary rather than the command sandbox. Their changes persist
+They use the persistent mutation boundary rather than the command sandbox. Their changes persist
 in the session output root; input remains read-only. The read-only compatibility dispatcher still
 advertises and executes none of them.
 

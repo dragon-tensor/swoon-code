@@ -1,7 +1,7 @@
 # Consumer build and test
 
-Phases 15 and 21 make the Python application directly testable as a consumer CLI and as both wheel
-and source release artifacts. Chromium remains a separate platform runtime. This keeps its
+The Python application is directly testable as a consumer CLI and as both wheel and source release
+artifacts. Chromium remains a separate platform runtime. This keeps its
 security-sensitive installation visible and updateable while still providing a normal `swoon`
 command.
 

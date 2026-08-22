@@ -251,7 +251,7 @@ in the first place; the reactive fallback catches what wasn't scoped.
   listings filter denied children as well.
 - Command tools are not shell escape hatches for these rules — path-shaped arguments inside a
   command string are checked against the same sandbox before execution.
-- In the Phase 12/13 command implementations, commands are split into a fixed argv and are never
+- In the foreground/background command implementations, commands are split into a fixed argv and are never
   passed to an interpreter-selected shell. Direct shell operators, traversal, cross-session
   absolute paths, credential paths, and URL arguments fail before launch.
 - Foreground and background commands receive credential-filtered snapshots rather than the physical session
@@ -627,7 +627,7 @@ Resolved by the guarded dependency declaration implementation:
 - A related lockfile causes a fail-closed `lockfile_present` result rather than an inconsistent
   manifest/lock pair. Approval is guarded by the manifest identity, metadata, size, and SHA-256.
 - Results explicitly report `package_artifacts=not_installed`; the historical tool name does not
-  imply that Phase 16 has downloaded or promoted executable third-party code.
+  imply that the interpreter downloaded or promoted executable third-party code.
 
 Resolved by the release licensing implementation:
 
@@ -642,7 +642,7 @@ Resolved by the release licensing implementation:
 Remaining open items:
 
 - Whether a future network-service capability should retain and join a dedicated isolated network
-  namespace so a dev server can be tested without exposing host networking. Phase 13 remains
+  namespace so a dev server can be tested without exposing host networking. Background execution remains
   socket-denied and does not claim dev-server support.
 - How package artifact acquisition should grant narrowly scoped network access, verify provenance,
   refresh locks, and promote package state without exposing user credentials or package caches.

@@ -7,6 +7,9 @@ tagged; the `0.x` series remains experimental and may introduce breaking changes
 
 ### Release candidate: 0.1.0
 
+- Remove obsolete relay, pre-agent read-only, and legacy session-design documents; keep the
+  commercial documentation index focused on current installation, operation, integration,
+  security, support, and release guidance.
 - Preserve source indentation end to end by requesting one XML code block, reading its exact DOM
   text, and supporting bounded strict Base64 for file-content/edit arguments.
 - Accept terminal bracketed paste as one coding task and add explicit `/paste` ... `/end` mode for
